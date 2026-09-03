@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-hide-booth-browser"
+description = "Enables the hide_booth_browser command without any pre-configured scope."
+commands.allow = ["hide_booth_browser"]
+
+[[permission]]
+identifier = "deny-hide-booth-browser"
+description = "Denies the hide_booth_browser command without any pre-configured scope."
+commands.deny = ["hide_booth_browser"]

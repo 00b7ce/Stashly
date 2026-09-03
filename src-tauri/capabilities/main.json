@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-capability",
+  "description": "Capabilities for the trusted local application UI only.",
+  "webviews": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "opener:default",
+    "allow-get-library",
+    "allow-set-library-root",
+    "allow-open-booth-browser",
+    "allow-hide-booth-browser",
+    "allow-resize-booth-browser",
+    "allow-navigate-booth-browser",
+    "allow-open-product-folder",
+    "allow-delete-downloaded-files"
+  ]
+}

@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release-windows:
+    name: Windows x64 NSIS
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Verify release version
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $packageVersion = node -p "require('./package.json').version"
+          $lockVersion = node -p "require('./package-lock.json').version"
+          $tauriVersion = node -p "require('./src-tauri/tauri.conf.json').version"
+          $cargoMatch = Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+          if (-not $cargoMatch) {
+            throw "Could not read the package version from src-tauri/Cargo.toml"
+          }
+          $cargoVersion = $cargoMatch.Matches[0].Groups[1].Value
+
+          $versions = @($packageVersion, $lockVersion, $tauriVersion, $cargoVersion)
+          if (($versions | Select-Object -Unique).Count -ne 1) {
+            throw "Version mismatch: package=$packageVersion lock=$lockVersion tauri=$tauriVersion cargo=$cargoVersion"
+          }
+          if ($env:RELEASE_TAG -ne "v$packageVersion") {
+            throw "Tag $env:RELEASE_TAG must equal v$packageVersion"
+          }
+
+      - name: Run frontend tests
+        run: npm run test
+
+      - name: Check frontend build
+        run: npm run build
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: Run Rust lints
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+      - name: Build NSIS installer and create draft release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Booth Shelf v__VERSION__"
+          releaseBody: |
+            Windows x64向けの未署名NSISインストーラです。
+
+            このReleaseはドラフトです。動作確認後に手動で公開してください。
+          releaseDraft: true
+          prerelease: false
+          args: --bundles nsis

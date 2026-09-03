@@ -1,0 +1,110 @@
+# Booth Shelf
+
+BOOTHから正当にダウンロードできる商品ファイルを、分かりやすいフォルダ構成と独立したローカルデータベースで管理するWindows向けデスクトップアプリです。Rust、Tauri 2、Reactで実装しています。
+
+> [!IMPORTANT]
+> Booth Shelfは個人が開発する非公式・実験的なオープンソースソフトウェアです。ピクシブ株式会社、BOOTH、pixiv、BOOTH Library Manager、各ショップオーナーとは提携・承認・協賛関係にありません。本アプリに関する問い合わせを公式サポートやショップオーナーへ送らないでください。
+
+## 主な機能
+
+- アプリ内の権限分離された専用WebViewでBOOTHと購入済みライブラリを表示
+- BOOTH Library Manager向けリンクを利用した整理済みダウンロード
+- `ショップ/商品名 [booth-ID]/variation-ID` 形式で保存
+- 商品名、ショップ名、商品IDによるローカル検索
+- 大・標準・小のサムネイル表示と横長リスト表示
+- SHA-256、ファイルサイズ、ローカルパスをアプリ専用SQLiteへ記録
+- 最大2ファイルの並行ダウンロードと重複ダウンロードの抑止
+- ZIPの安全な一時展開、パストラバーサル・リンク・件数・展開サイズ検査
+- システム・ライト・ダークテーマとアクセントカラー
+
+公式BOOTH Library Managerのデータベース、保存先、Windowsの`booth-library-manager://`プロトコル登録は参照・変更しません。
+
+## 動作の概要
+
+1. 専用WebViewでBOOTHへ直接ログインします。認証情報をBooth Shelfのコードへ入力する方式ではありません。
+2. 購入済みライブラリのダウンロード操作を、ページ内にあるBOOTH Library Manager向け操作へ接続します。
+3. WebViewの遷移として発生した非公開deeplinkをアプリ内で捕捉し、形式とダウンロード先ホストを検査します。
+4. 署名付きURLを永続化せず、アプリ専用の一時領域へ直ちにダウンロードします。
+5. ファイルを検査・ハッシュ化し、選択されたライブラリへ移動してローカルSQLiteへ登録します。
+6. 商品名とショップ名は、該当する公開商品ページのOpen Graphメタデータから取得します。
+
+詳しい信頼境界とデータフローは[アーキテクチャ](docs/architecture.md)を参照してください。
+
+## 必要環境
+
+- Windows 10またはWindows 11（x64）
+- Microsoft Edge WebView2 Runtime
+- インストール時およびBOOTH利用時のインターネット接続
+
+## インストール
+
+GitHub Releasesから`Booth Shelf_*_x64-setup.exe`を取得して実行します。
+
+現在のWindowsインストーラにはAuthenticode署名がありません。Microsoft Defender SmartScreenの警告が表示される可能性があります。Windowsの保護機能を無効化せず、配布元がこのリポジトリのGitHub Releasesであることを確認してください。
+
+## 基本的な使い方
+
+1. 設定画面で、Booth Shelf専用の保存先を選択します。公式BOOTH Library Managerの保存先とは分けてください。
+2. サイドバーから「BOOTHライブラリ」を開き、BOOTHへログインします。
+3. 自分が正当に取得できる商品の「ダウンロード」を選択します。
+4. 完了後、ローカルライブラリから商品フォルダを開きます。
+
+## データとプライバシー
+
+- BOOTHのCookieは、OSのアプリデータ領域にある専用WebViewプロファイルへ永続保存されます。Cookieを消去するアプリ内UIはまだありません。
+- SQLiteには、保存先、商品ID・名称・ショップ名、商品URL、サムネイルURL、ファイル名、ローカルパス、SHA-256、サイズ、ダウンロード日時を保存します。
+- 注文ID、生のdeeplink、Cookie、CSRFトークン、署名付きダウンロードURLはSQLiteやアプリログへ保存しない設計です。
+- テレメトリ、広告、商品ファイルの外部アップロード機能はありません。
+- 通常のBOOTH通信に加え、ダウンロード時に公開商品ページとBOOTH画像CDNへアクセスします。
+- 現行版では、ダウンロード通知のためファイル名、商品ID、完了メッセージをBOOTH WebViewへ渡します。完了メッセージには保存パスが含まれるため、個人情報を含まない専用の保存先を使用してください。
+
+## 重要な制限と安全上の注意
+
+- BOOTHが公開仕様として保証していない日本語版ライブラリのDOM、BOOTH Library Manager向けdeeplink、`s6.booth.pm`に依存しています。サービス側の変更・制限により、予告なく一部または全部が動作しなくなる可能性があります。
+- ページ構造が想定と異なる場合は安全側に停止し、「その他のDL方法」を再表示します。通常のブラウザダウンロードの横取りは行いません。
+- ポップアップは拒否します。認証フローがポップアップ必須へ変更された場合は利用できません。
+- ダウンロードした商品とZIP内ファイルは信頼せず、ウイルス対策ソフト等で確認してください。Booth Shelfが展開したファイルを自動実行することはありません。
+- 設定画面の一括削除は、Booth ShelfのSQLiteに登録されたファイルと展開フォルダを完全に削除します。ごみ箱には移動せず、元に戻せません。専用の保存先を使用し、確認画面の対象パスを必ず確認してください。
+- 既存ファイルを強制的に上書きする更新機能、タグ編集、ZIP以外の自動展開は未実装です。
+
+## 利用者の責任
+
+利用者自身が正当にダウンロードできる商品にのみ使用し、[BOOTH・pixivの利用規約とガイドライン](https://policies.pixiv.net/)、各クリエイターが定める利用条件、適用法令を遵守してください。ダウンロードした商品データの共有、再配布、販売、改変その他の利用可否は、各権利者が定める条件に従います。
+
+## 開発
+
+### 必要なツール
+
+- Node.js 24
+- Rust stable（MSVC toolchain）
+- Visual Studio Build Toolsの「C++によるデスクトップ開発」
+- Microsoft Edge WebView2 Runtime
+
+### セットアップ
+
+```powershell
+npm.cmd ci
+npm.cmd run tauri -- dev
+```
+
+### 検証
+
+```powershell
+npm.cmd run test
+npm.cmd run build
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+cargo test --manifest-path src-tauri/Cargo.toml --locked
+```
+
+実機確認を含む手順は[開発ドキュメント](docs/development.md)を参照してください。
+
+## リリース
+
+`v0.8.0`のように、`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`と一致するタグをpushすると、GitHub Actionsが検証とWindows x64 NSISビルドを実行し、未署名インストーラを含むドラフトReleaseを作成します。内容と生成物を確認してから手動で公開してください。
+
+## ライセンスと商標
+
+このリポジトリで本プロジェクトが権利を有するソースコードは[MIT License](LICENSE)で提供します。
+
+MIT Licenseは、BOOTH・pixivの名称、商標、ロゴ、ウェブサイト上の素材、商品情報、購入・ダウンロードしたコンテンツ、その他第三者の著作物には適用されません。これらの権利は各権利者に帰属します。
