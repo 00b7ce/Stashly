@@ -345,6 +345,12 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the clear_booth_browser_data command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-clear-booth-browser-data",
+          "markdownDescription": "Enables the clear_booth_browser_data command without any pre-configured scope."
+        },
+        {
           "description": "Enables the delete_downloaded_files command without any pre-configured scope.",
           "type": "string",
           "const": "allow-delete-downloaded-files",
@@ -391,6 +397,12 @@
           "type": "string",
           "const": "allow-set-library-root",
           "markdownDescription": "Enables the set_library_root command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the clear_booth_browser_data command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-clear-booth-browser-data",
+          "markdownDescription": "Denies the clear_booth_browser_data command without any pre-configured scope."
         },
         {
           "description": "Denies the delete_downloaded_files command without any pre-configured scope.",

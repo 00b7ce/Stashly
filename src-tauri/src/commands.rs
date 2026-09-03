@@ -94,6 +94,11 @@ pub fn navigate_booth_browser(
 }
 
 #[tauri::command]
+pub fn clear_booth_browser_data(app: AppHandle) -> AppResult<()> {
+    webview::clear_browsing_data(&app)
+}
+
+#[tauri::command]
 pub fn open_product_folder(
     item_id: i64,
     app: AppHandle,

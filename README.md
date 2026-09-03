@@ -51,12 +51,12 @@ GitHub Releasesから`Booth Shelf_*_x64-setup.exe`を取得して実行します
 
 ## データとプライバシー
 
-- BOOTHのCookieは、OSのアプリデータ領域にある専用WebViewプロファイルへ永続保存されます。Cookieを消去するアプリ内UIはまだありません。
+- BOOTHのCookieなどの閲覧データは、OSのアプリデータ領域にある専用WebViewプロファイルへ保存されます。設定画面の「BOOTHブラウザーの個人データを削除」から、ダウンロード済みファイルやライブラリ登録を残したまま消去できます。
 - SQLiteには、保存先、商品ID・名称・ショップ名、商品URL、サムネイルURL、ファイル名、ローカルパス、SHA-256、サイズ、ダウンロード日時を保存します。
 - 注文ID、生のdeeplink、Cookie、CSRFトークン、署名付きダウンロードURLはSQLiteやアプリログへ保存しない設計です。
 - テレメトリ、広告、商品ファイルの外部アップロード機能はありません。
 - 通常のBOOTH通信に加え、ダウンロード時に公開商品ページとBOOTH画像CDNへアクセスします。
-- 現行版では、ダウンロード通知のためファイル名、商品ID、完了メッセージをBOOTH WebViewへ渡します。完了メッセージには保存パスが含まれるため、個人情報を含まない専用の保存先を使用してください。
+- BOOTH WebViewへ渡すダウンロード通知データは、ランダムな通知IDと状態だけです。ファイル名、商品ID、保存パス、内部エラー文は渡しません。完了通知をクリックした場合は、短時間だけ保持する一度限りの通知IDからRust側で保存フォルダを解決します。
 
 ## 重要な制限と安全上の注意
 
@@ -101,7 +101,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked
 
 ## リリース
 
-`v0.8.0`のように、`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`と一致するタグをpushすると、GitHub Actionsが検証とWindows x64 NSISビルドを実行し、未署名インストーラを含むドラフトReleaseを作成します。内容と生成物を確認してから手動で公開してください。
+`v1.0.0`のように、`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`と一致するタグをpushすると、GitHub Actionsが検証とWindows x64 NSISビルドを実行し、未署名インストーラを含むドラフトReleaseを作成します。内容と生成物を確認してから手動で公開してください。
 
 ## ライセンスと商標
 

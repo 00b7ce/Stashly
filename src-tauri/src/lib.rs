@@ -15,6 +15,7 @@ use crate::{db::Database, download::DownloadQueue, error::AppError};
 pub struct AppState {
     database: Database,
     download_queue: DownloadQueue,
+    completed_download_actions: webview::CompletedDownloadActions,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -32,6 +33,7 @@ pub fn run() {
             app.manage(AppState {
                 database: database.clone(),
                 download_queue: download_queue.clone(),
+                completed_download_actions: webview::CompletedDownloadActions::default(),
             });
             tauri::async_runtime::spawn(download::run(
                 app.handle().clone(),
@@ -48,6 +50,7 @@ pub fn run() {
             commands::hide_booth_browser,
             commands::resize_booth_browser,
             commands::navigate_booth_browser,
+            commands::clear_booth_browser_data,
             commands::open_product_folder,
             commands::delete_downloaded_files,
         ])

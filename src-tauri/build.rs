@@ -6,6 +6,7 @@ fn main() {
         "hide_booth_browser",
         "resize_booth_browser",
         "navigate_booth_browser",
+        "clear_booth_browser_data",
         "open_product_folder",
         "delete_downloaded_files",
     ]);

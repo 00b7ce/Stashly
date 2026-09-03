@@ -1,10 +1,11 @@
 use std::{
-    path::PathBuf,
+    collections::HashMap,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, Manager, WebviewUrl, webview::WebviewBuilder};
 use url::Url;
@@ -22,7 +23,55 @@ const MAIN_WINDOW_LABEL: &str = "main";
 const LOCAL_ACTION_SCHEME: &str = "booth-shelf";
 const OPEN_FOLDER_ACTION_HOST: &str = "open-product-folder";
 const BLM_FALLBACK_WINDOW: Duration = Duration::from_secs(10);
+const COMPLETED_ACTION_LIFETIME: Duration = Duration::from_secs(30);
 const BOOTH_DOWNLOAD_BRIDGE: &str = include_str!("booth_download_bridge.js");
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserDownloadStatus<'a> {
+    request_id: &'a str,
+    state: DownloadState,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct CompletedDownloadActions {
+    actions: Arc<Mutex<HashMap<String, CompletedDownloadAction>>>,
+}
+
+struct CompletedDownloadAction {
+    item_id: i64,
+    created_at: Instant,
+}
+
+impl CompletedDownloadActions {
+    fn remember(&self, request_id: &str, item_id: i64, now: Instant) {
+        if item_id <= 0 || uuid::Uuid::parse_str(request_id).is_err() {
+            return;
+        }
+        let Ok(mut actions) = self.actions.lock() else {
+            return;
+        };
+        actions
+            .retain(|_, action| now.duration_since(action.created_at) <= COMPLETED_ACTION_LIFETIME);
+        if actions.len() >= 64 {
+            actions.clear();
+        }
+        actions.insert(
+            request_id.to_owned(),
+            CompletedDownloadAction {
+                item_id,
+                created_at: now,
+            },
+        );
+    }
+
+    fn take(&self, request_id: &str, now: Instant) -> Option<i64> {
+        let mut actions = self.actions.lock().ok()?;
+        let action = actions.remove(request_id)?;
+        (now.duration_since(action.created_at) <= COMPLETED_ACTION_LIFETIME)
+            .then_some(action.item_id)
+    }
+}
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -96,11 +145,7 @@ pub async fn show(
         return Ok(());
     }
 
-    let profile_dir: PathBuf = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|_| AppError::MissingAppDataDirectory)?
-        .join("booth-webview");
+    let profile_dir = profile_directory(&app)?;
     let callback_app = app.clone();
     let callback_sender = sender.clone();
     let last_blm_deeplink = Arc::new(Mutex::new(None));
@@ -111,10 +156,17 @@ pub async fn show(
         .initialization_script(BOOTH_DOWNLOAD_BRIDGE)
         .on_navigation(move |url| {
             if url.scheme() == LOCAL_ACTION_SCHEME {
-                if let Some(item_id) = open_folder_item_id(url) {
+                if let Some(request_id) = open_folder_request_id(url) {
                     let action_app = callback_app.clone();
                     tauri::async_runtime::spawn(async move {
-                        let _ = crate::commands::open_product_folder_for_app(item_id, &action_app);
+                        let actions = action_app.state::<crate::AppState>();
+                        if let Some(item_id) = actions
+                            .completed_download_actions
+                            .take(&request_id, Instant::now())
+                        {
+                            let _ =
+                                crate::commands::open_product_folder_for_app(item_id, &action_app);
+                        }
                     });
                 }
                 false
@@ -220,17 +272,47 @@ pub fn navigate(app: &AppHandle, action: BrowserNavigationAction) -> AppResult<(
         .map_err(|error| AppError::InvalidPayload(error.to_string()))
 }
 
+pub fn clear_browsing_data(app: &AppHandle) -> AppResult<()> {
+    if let Some(webview) = app.get_webview(BROWSER_LABEL) {
+        return webview
+            .clear_all_browsing_data()
+            .map_err(|error| AppError::InvalidPayload(error.to_string()));
+    }
+
+    let profile_dir = profile_directory(app)?;
+    remove_profile_directory(&profile_dir)
+}
+
+fn remove_profile_directory(profile_dir: &Path) -> AppResult<()> {
+    match std::fs::remove_dir_all(profile_dir) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
 pub fn notify_download_status(app: &AppHandle, event: &DownloadStatusEvent) {
     let Some(webview) = app.get_webview(BROWSER_LABEL) else {
         return;
     };
-    let Ok(payload) = serde_json::to_string(event) else {
+    let status = BrowserDownloadStatus {
+        request_id: &event.request_id,
+        state: event.state,
+    };
+    if matches!(event.state, DownloadState::Completed)
+        && let Some(item_id) = event.item_id
+    {
+        app.state::<crate::AppState>()
+            .completed_download_actions
+            .remember(&event.request_id, item_id, Instant::now());
+    }
+    let Ok(payload) = serde_json::to_string(&status) else {
         return;
     };
     let _ = webview.eval(format!("window.__boothShelfNotify?.({payload});"));
 }
 
-fn open_folder_item_id(url: &Url) -> Option<i64> {
+fn open_folder_request_id(url: &Url) -> Option<String> {
     if url.scheme() != LOCAL_ACTION_SCHEME
         || url.host_str() != Some(OPEN_FOLDER_ACTION_HOST)
         || !matches!(url.path(), "" | "/")
@@ -244,10 +326,18 @@ fn open_folder_item_id(url: &Url) -> Option<i64> {
 
     let mut pairs = url.query_pairs();
     let (key, value) = pairs.next()?;
-    if key != "item_id" || pairs.next().is_some() {
+    if key != "request_id" || pairs.next().is_some() {
         return None;
     }
-    value.parse::<i64>().ok().filter(|item_id| *item_id > 0)
+    uuid::Uuid::parse_str(&value).ok().map(|id| id.to_string())
+}
+
+fn profile_directory(app: &AppHandle) -> AppResult<PathBuf> {
+    Ok(app
+        .path()
+        .app_local_data_dir()
+        .map_err(|_| AppError::MissingAppDataDirectory)?
+        .join("booth-webview"))
 }
 
 fn should_suppress_blm_fallback(
@@ -350,26 +440,75 @@ mod tests {
         assert!(BOOTH_DOWNLOAD_BRIDGE.contains("window.__boothShelfNotify ="));
         assert!(BOOTH_DOWNLOAD_BRIDGE.contains("status.requestId"));
         assert!(BOOTH_DOWNLOAD_BRIDGE.contains("status.state === \"completed\""));
-        assert!(BOOTH_DOWNLOAD_BRIDGE.contains("booth-shelf://open-product-folder"));
         assert!(BOOTH_DOWNLOAD_BRIDGE.contains("booth-shelf-notification-expiry"));
+        assert!(!BOOTH_DOWNLOAD_BRIDGE.contains("status.message"));
+        assert!(!BOOTH_DOWNLOAD_BRIDGE.contains("status.filename"));
+        assert!(!BOOTH_DOWNLOAD_BRIDGE.contains("status.itemId"));
+        assert!(BOOTH_DOWNLOAD_BRIDGE.contains("open-product-folder?request_id="));
     }
 
     #[test]
-    fn folder_notification_action_accepts_only_one_positive_item_id() {
-        let valid = Url::parse("booth-shelf://open-product-folder?item_id=3848152").unwrap();
-        assert_eq!(open_folder_item_id(&valid), Some(3_848_152));
+    fn folder_notification_action_accepts_only_one_uuid_request_id() {
+        let request_id = "7cf15df3-9714-4ff5-bf56-ab976127be9d";
+        let valid = Url::parse(&format!(
+            "booth-shelf://open-product-folder?request_id={request_id}"
+        ))
+        .unwrap();
+        assert_eq!(open_folder_request_id(&valid).as_deref(), Some(request_id));
 
         for invalid in [
-            "booth-shelf://open-product-folder?item_id=0",
-            "booth-shelf://open-product-folder?item_id=-1",
-            "booth-shelf://open-product-folder?item_id=1&item_id=2",
-            "booth-shelf://open-product-folder?item_id=1&extra=true",
-            "booth-shelf://open-product-folder/path?item_id=1",
-            "booth-shelf://other?item_id=1",
-            "https://accounts.booth.pm/library?item_id=1",
+            "booth-shelf://open-product-folder?request_id=not-a-uuid",
+            "booth-shelf://open-product-folder?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d&extra=true",
+            "booth-shelf://open-product-folder/path?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d",
+            "booth-shelf://other?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d",
+            "https://accounts.booth.pm/library?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d",
         ] {
-            assert_eq!(open_folder_item_id(&Url::parse(invalid).unwrap()), None);
+            assert_eq!(open_folder_request_id(&Url::parse(invalid).unwrap()), None);
         }
+    }
+
+    #[test]
+    fn completed_action_is_one_time_and_expires() {
+        let actions = CompletedDownloadActions::default();
+        let now = Instant::now();
+        let request_id = "7cf15df3-9714-4ff5-bf56-ab976127be9d";
+        actions.remember(request_id, 3_848_152, now);
+
+        assert_eq!(actions.take(request_id, now), Some(3_848_152));
+        assert_eq!(actions.take(request_id, now), None);
+
+        actions.remember(request_id, 3_848_152, now);
+        assert_eq!(
+            actions.take(
+                request_id,
+                now + COMPLETED_ACTION_LIFETIME + Duration::from_secs(1)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn browser_notification_payload_excludes_local_and_remote_metadata() {
+        let event = DownloadStatusEvent {
+            request_id: "opaque-request-id".into(),
+            item_id: Some(3_848_152),
+            filename: Some("private-file.zip".into()),
+            state: DownloadState::Completed,
+            message: r"Saved to C:\Users\person\Downloads\private-file.zip".into(),
+        };
+        let payload = serde_json::to_value(BrowserDownloadStatus {
+            request_id: &event.request_id,
+            state: event.state,
+        })
+        .unwrap();
+
+        assert_eq!(
+            payload,
+            serde_json::json!({
+                "requestId": "opaque-request-id",
+                "state": "completed",
+            })
+        );
     }
 
     #[test]
@@ -383,6 +522,20 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .contains(&serde_json::json!("allow-navigate-booth-browser"))
+        );
+        assert!(
+            capability["permissions"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("allow-clear-booth-browser-data"))
+        );
+        assert!(
+            !capability["permissions"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(
+                    "core:webview:allow-clear-all-browsing-data"
+                ))
         );
         assert!(
             !capability["permissions"]
@@ -452,5 +605,20 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn profile_cleanup_removes_only_the_given_directory_and_accepts_missing_data() {
+        let temp = tempfile::tempdir().unwrap();
+        let profile = temp.path().join("booth-webview");
+        let sibling = temp.path().join("booth-shelf.db");
+        std::fs::create_dir_all(profile.join("Network")).unwrap();
+        std::fs::write(profile.join("Network").join("Cookies"), b"private").unwrap();
+        std::fs::write(&sibling, b"library").unwrap();
+
+        remove_profile_directory(&profile).unwrap();
+        assert!(!profile.exists());
+        assert!(sibling.exists());
+        remove_profile_directory(&profile).unwrap();
     }
 }

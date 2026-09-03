@@ -7,6 +7,7 @@ import {
   ArrowRight,
   Box,
   CheckCircle2,
+  Cookie,
   Download,
   ExternalLink,
   Folder,
@@ -148,6 +149,9 @@ export function App() {
   const [deleting, setDeleting] = useState(false);
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [cleanupMessage, setCleanupMessage] = useState<string | null>(null);
+  const [clearingBrowserData, setClearingBrowserData] = useState(false);
+  const [browserDataConfirmationOpen, setBrowserDataConfirmationOpen] = useState(false);
+  const [browserDataMessage, setBrowserDataMessage] = useState<string | null>(null);
   const contentRef = useRef<HTMLElement>(null);
   const browserViewportRef = useRef<HTMLDivElement>(null);
   const notificationTimers = useRef(new Map<string, number>());
@@ -388,6 +392,27 @@ export function App() {
     }
   }
 
+  function requestClearBrowserData() {
+    if (clearingBrowserData) return;
+    setBrowserDataConfirmationOpen(true);
+  }
+
+  async function confirmClearBrowserData() {
+    if (clearingBrowserData) return;
+    setBrowserDataConfirmationOpen(false);
+    setClearingBrowserData(true);
+    setBrowserDataMessage(null);
+    try {
+      await invoke("clear_booth_browser_data");
+      setBrowserDataMessage("BOOTHブラウザーの個人データを削除しました。次回表示時は再ログインが必要です。");
+      setError(null);
+    } catch (reason) {
+      setError(errorText(reason));
+    } finally {
+      setClearingBrowserData(false);
+    }
+  }
+
   return (
     <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <aside className="sidebar">
@@ -470,10 +495,13 @@ export function App() {
             accentColor={accentColor}
             deleting={deleting}
             cleanupMessage={cleanupMessage}
+            clearingBrowserData={clearingBrowserData}
+            browserDataMessage={browserDataMessage}
             onChooseRoot={() => void chooseLibraryRoot()}
             onThemeChange={changeThemeMode}
             onAccentColorChange={changeAccentColor}
             onDelete={requestDeleteAllDownloads}
+            onClearBrowserData={requestClearBrowserData}
           />
         ) : activeView === "library" ? (
           <>
@@ -541,6 +569,13 @@ export function App() {
             libraryRoot={library.libraryRoot}
             onCancel={() => setDeleteConfirmationOpen(false)}
             onConfirm={() => void confirmDeleteAllDownloads()}
+          />
+        )}
+
+        {browserDataConfirmationOpen && (
+          <BrowserDataConfirmationDialog
+            onCancel={() => setBrowserDataConfirmationOpen(false)}
+            onConfirm={() => void confirmClearBrowserData()}
           />
         )}
       </main>
@@ -709,16 +744,55 @@ export function DeleteConfirmationDialog({ libraryRoot, onCancel, onConfirm }: {
   </div>;
 }
 
-function SettingsView({ libraryRoot, themeMode, accentColor, deleting, cleanupMessage, onChooseRoot, onThemeChange, onAccentColorChange, onDelete }: {
+export function BrowserDataConfirmationDialog({ onCancel, onConfirm }: {
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    cancelRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onCancel]);
+
+  return <div
+    className="modal-backdrop"
+    onMouseDown={(event) => event.target === event.currentTarget && onCancel()}
+  >
+    <section className="confirmation-dialog" role="alertdialog" aria-modal="true" aria-labelledby="browser-data-dialog-title" aria-describedby="browser-data-dialog-description">
+      <div className="confirmation-icon"><TriangleAlert size={25} /></div>
+      <div className="confirmation-copy">
+        <p className="eyebrow">PRIVACY DATA</p>
+        <h2 id="browser-data-dialog-title">BOOTHブラウザーの個人データを削除しますか？</h2>
+        <p id="browser-data-dialog-description">
+          専用WebViewに保存されたCookie、キャッシュ、閲覧履歴、ローカルストレージなどを削除します。BOOTHとpixivからログアウトします。ダウンロード済みファイルとBooth Shelfのライブラリ登録は削除しません。
+        </p>
+      </div>
+      <div className="confirmation-actions">
+        <button ref={cancelRef} className="modal-cancel" type="button" onClick={onCancel}>キャンセル</button>
+        <button className="modal-delete" type="button" onClick={onConfirm}><Trash2 size={17} />個人データを削除</button>
+      </div>
+    </section>
+  </div>;
+}
+
+function SettingsView({ libraryRoot, themeMode, accentColor, deleting, cleanupMessage, clearingBrowserData, browserDataMessage, onChooseRoot, onThemeChange, onAccentColorChange, onDelete, onClearBrowserData }: {
   libraryRoot: string | null;
   themeMode: ThemeMode;
   accentColor: string;
   deleting: boolean;
   cleanupMessage: string | null;
+  clearingBrowserData: boolean;
+  browserDataMessage: string | null;
   onChooseRoot: () => void;
   onThemeChange: (mode: ThemeMode) => void;
   onAccentColorChange: (color: string) => void;
   onDelete: () => void;
+  onClearBrowserData: () => void;
 }) {
   return <section className="settings-layout" aria-label="設定">
     <article className="settings-card">
@@ -744,6 +818,19 @@ function SettingsView({ libraryRoot, themeMode, accentColor, deleting, cleanupMe
         </div>
         <button className="secondary-button" onClick={onChooseRoot}>
           <FolderOpen size={17} />{libraryRoot ? "保存先を変更" : "保存先を選択"}
+        </button>
+      </div>
+    </article>
+
+    <article className="settings-card danger-card">
+      <div className="settings-icon danger-icon"><Cookie size={22} /></div>
+      <div className="settings-body">
+        <h2>BOOTHブラウザーの個人データ</h2>
+        <p>専用WebViewに保存されたCookie、キャッシュ、閲覧履歴、ローカルストレージなどを削除します。ダウンロード済みファイルとライブラリ登録には影響しません。</p>
+        {browserDataMessage && <div className="success-banner"><CheckCircle2 size={17} />{browserDataMessage}</div>}
+        <button className="danger-button" onClick={onClearBrowserData} disabled={clearingBrowserData}>
+          {clearingBrowserData ? <LoaderCircle size={17} className="spin" /> : <Trash2 size={17} />}
+          {clearingBrowserData ? "削除しています…" : "BOOTHブラウザーの個人データを削除"}
         </button>
       </div>
     </article>

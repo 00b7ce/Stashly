@@ -5,6 +5,7 @@ import {
   ActivityPanel,
   App,
   BrowserToolbar,
+  BrowserDataConfirmationDialog,
   DeleteConfirmationDialog,
   LibraryViewPicker,
   ProductCard,
@@ -142,6 +143,22 @@ describe("DeleteConfirmationDialog", () => {
     expect(markup).toContain("F:\\BOOTH_files");
     expect(markup).toContain("キャンセル");
     expect(markup).toContain("すべて削除");
+  });
+});
+
+describe("BrowserDataConfirmationDialog", () => {
+  it("explains the isolated data scope before clearing it", () => {
+    const markup = renderToStaticMarkup(
+      <BrowserDataConfirmationDialog
+        onCancel={() => undefined}
+        onConfirm={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('role="alertdialog"');
+    expect(markup).toContain("Cookie、キャッシュ、閲覧履歴、ローカルストレージ");
+    expect(markup).toContain("ダウンロード済みファイル");
+    expect(markup).toContain("個人データを削除");
   });
 });
 

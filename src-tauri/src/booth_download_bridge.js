@@ -40,10 +40,10 @@
         }
         #${NOTIFICATION_HOST_ID} .booth-shelf-notification.completed { color: #2d8a6a; }
         #${NOTIFICATION_HOST_ID} .booth-shelf-notification.failed { color: #b43d57; }
-        #${NOTIFICATION_HOST_ID} .booth-shelf-notification.completed[data-item-id] {
+        #${NOTIFICATION_HOST_ID} .booth-shelf-notification.completed[data-request-id] {
           cursor: pointer;
         }
-        #${NOTIFICATION_HOST_ID} .booth-shelf-notification.completed[data-item-id]:hover {
+        #${NOTIFICATION_HOST_ID} .booth-shelf-notification.completed[data-request-id]:hover {
           transform: translateY(-2px); box-shadow: 0 12px 34px #25304730;
         }
         #${NOTIFICATION_HOST_ID} .booth-shelf-notification-icon {
@@ -109,9 +109,9 @@
         <div class="booth-shelf-notification-expiry" aria-hidden="true"></div>
       `;
       const openCompletedFolder = () => {
-        const itemId = row.dataset.itemId;
-        if (!itemId || !row.classList.contains("completed")) return;
-        window.location.href = `booth-shelf://open-product-folder?item_id=${encodeURIComponent(itemId)}`;
+        const requestId = row.dataset.requestId;
+        if (!requestId || !row.classList.contains("completed")) return;
+        window.location.href = `booth-shelf://open-product-folder?request_id=${encodeURIComponent(requestId)}`;
       };
       row.addEventListener("click", openCompletedFolder);
       row.addEventListener("keydown", (event) => {
@@ -128,18 +128,23 @@
     row.className = `booth-shelf-notification ${String(status.state || "")}`;
     row.querySelector(".booth-shelf-notification-icon").textContent =
       status.state === "completed" ? "✓" : status.state === "failed" ? "!" : "◌";
-    row.querySelector("strong").textContent = status.filename || "BOOTH download";
-    row.querySelector("span").textContent = status.message || "";
-    delete row.dataset.itemId;
+    const copy = status.state === "completed"
+      ? ["ダウンロード完了", "ダウンロードが完了しました。"]
+      : status.state === "failed"
+        ? ["ダウンロード失敗", "詳細はBooth Shelfを確認してください。"]
+        : status.state === "downloading"
+          ? ["ダウンロード中", "ダウンロードしています。"]
+          : ["ダウンロード受付", "ダウンロードを受け付けました。"];
+    row.querySelector("strong").textContent = copy[0];
+    row.querySelector("span").textContent = copy[1];
+    delete row.dataset.requestId;
     row.removeAttribute("role");
     row.removeAttribute("tabindex");
-
-    const itemId = Number(status.itemId);
-    if (status.state === "completed" && Number.isSafeInteger(itemId) && itemId > 0) {
-      row.dataset.itemId = String(itemId);
+    if (status.state === "completed" && status.requestId) {
+      row.dataset.requestId = String(status.requestId);
       row.setAttribute("role", "button");
       row.setAttribute("tabindex", "0");
-      row.setAttribute("aria-label", `${status.filename || "BOOTH download"} の保存フォルダを開く`);
+      row.setAttribute("aria-label", "ダウンロード済み商品のフォルダを開く");
     }
 
     const existingTimer = notificationTimers.get(key);

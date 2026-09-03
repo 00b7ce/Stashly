@@ -185,17 +185,17 @@ pub async fn run(
             )
             .await
             {
-                Ok(ProcessOutcome::Downloaded(path)) => emit(
+                Ok(ProcessOutcome::Downloaded(_)) => emit(
                     &task_app,
                     &request,
                     DownloadState::Completed,
-                    &format!("Saved to {}", path.display()),
+                    "Download completed",
                 ),
-                Ok(ProcessOutcome::AlreadyDownloaded(path)) => emit(
+                Ok(ProcessOutcome::AlreadyDownloaded(_)) => emit(
                     &task_app,
                     &request,
                     DownloadState::Completed,
-                    &format!("Already downloaded at {}", path.display()),
+                    "Already downloaded",
                 ),
                 Err(error) => emit(
                     &task_app,
