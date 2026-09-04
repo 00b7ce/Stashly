@@ -69,6 +69,26 @@ const LIBRARY_VIEW_STORAGE_KEY = "booth-shelf-library-view";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "booth-shelf-sidebar-collapsed";
 const THEME_MODE_STORAGE_KEY = "booth-shelf-theme-mode";
 const ACCENT_COLOR_STORAGE_KEY = "booth-shelf-accent-color";
+
+export function browserViewForUrl(value: string): Extract<ActiveView, "booth" | "booth-library"> | null {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:") return null;
+  if (
+    url.hostname === "accounts.booth.pm" &&
+    (url.pathname === "/library" || url.pathname.startsWith("/library/"))
+  ) {
+    return "booth-library";
+  }
+  if (url.hostname === "booth.pm" || url.hostname.endsWith(".booth.pm")) {
+    return "booth";
+  }
+  return null;
+}
 const DEFAULT_ACCENT_COLOR = "#e76b8c";
 
 function initialLibraryView(): LibraryViewMode {
@@ -213,6 +233,8 @@ export function App() {
     void getVersion().then(setAppVersion).catch(() => setAppVersion("取得できませんでした"));
     const unlisten = listen<string>(BROWSER_LOCATION_EVENT, ({ payload }) => {
       setBrowserUrl(payload);
+      const view = browserViewForUrl(payload);
+      if (view) setActiveView(view);
     });
     return () => {
       void unlisten.then((dispose) => dispose());
@@ -345,7 +367,7 @@ export function App() {
       width: Math.max(1, rect.width),
       height: Math.max(1, rect.height),
     };
-  }, [sidebarCollapsed]);
+  }, []);
 
   useEffect(() => {
     if (!browserViewActive) {
@@ -366,12 +388,13 @@ export function App() {
         );
       });
     };
+    resizeBrowser();
     window.addEventListener("resize", resizeBrowser);
     return () => {
       window.removeEventListener("resize", resizeBrowser);
       window.cancelAnimationFrame(frame);
     };
-  }, [browserBounds, browserViewActive]);
+  }, [browserBounds, browserViewActive, sidebarCollapsed]);
 
   async function saveLibraryRoot(root: string, allowNonLocal: boolean): Promise<boolean> {
     setSavingLibraryRoot(true);

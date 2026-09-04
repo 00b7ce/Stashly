@@ -33,6 +33,9 @@ For a manual download test, use a free item already present in the user's accoun
 
 - the ordinary BOOTH download stays inside the dedicated WebView download flow and no copy appears in the system Downloads folder;
 - BOOTH opens inside the main native window beside the persistent sidebar, without creating another top-level window;
+- expanding and collapsing the sidebar immediately repositions and resizes the embedded BOOTH page without overlap;
+- links that BOOTH marks to open in a new tab, including followed-shop updates and free-library item pages, open in the existing embedded WebView; a non-BOOTH/pixiv popup remains blocked;
+- a product opened from the free-download library selects the BOOTH sidebar destination, while returning to BOOTH library restores the previous free-download page;
 - the BOOTH toolbar stays above the embedded page, its back, forward, and reload buttons affect only the embedded browser, and its non-editable URL follows navigation;
 - primary-clicking the displayed URL copies the visible sanitized value and shows the confirmation popup; right-clicking opens no context menu, and the address cannot be edited, selected, or dragged;
 - authentication parameters, fragments, and non-page library query parameters are absent from the displayed and copied URL;
@@ -46,6 +49,8 @@ For a manual download test, use a free item already present in the user's accoun
 - the local library heading, search field, view selector, and refresh action share one row; all three grid sizes and the horizontal list layout remain usable at the minimum window width;
 - the `booth-browser` child WebView cannot invoke local commands, dialogs, opener APIs, or filesystem functionality;
 - the normal BOOTH library download button starts the Stashly for BOOTH flow and its paired alternative-download control is hidden;
+- an exact BOOTH product page's free-download link starts the same Stashly for BOOTH flow;
+- navigating between product pages without a full document reload binds the download to the currently displayed product ID and folder, never a previously viewed product;
 - a DOM mismatch keeps the alternative-download control hidden but refuses to arm the normal download instead of guessing product or download IDs;
 - no download intent or signed URL appears in logs or SQLite;
 - the file lands under the selected test root;

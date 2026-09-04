@@ -359,6 +359,7 @@ pub async fn show(app: AppHandle, initial_url: String, bounds: BrowserBounds) ->
     let download_callback_state = native_downloads.clone();
     let page_load_locations = browser_locations.clone();
     let page_load_app = app.clone();
+    let new_window_app = app.clone();
     let initial_location = target.clone();
 
     let builder = WebviewBuilder::new(BROWSER_LABEL, WebviewUrl::External(target))
@@ -412,7 +413,17 @@ pub async fn show(app: AppHandle, initial_url: String, bounds: BrowserBounds) ->
                 replay_download_notifications(&webview, &active_notifications);
             }
         })
-        .on_new_window(|_, _| NewWindowResponse::Deny);
+        .on_new_window(move |url, _| {
+            if let Some(target) = new_window_navigation_target(url) {
+                let navigation_app = new_window_app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Some(webview) = navigation_app.get_webview(BROWSER_LABEL) {
+                        let _ = webview.navigate(target);
+                    }
+                });
+            }
+            NewWindowResponse::Deny
+        });
     let window = app
         .get_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| AppError::InvalidPayload("the main window is unavailable".into()))?;
@@ -823,6 +834,10 @@ fn emit_browser_location(app: &AppHandle, url: &Url) {
     let _ = app.emit_to(MAIN_WINDOW_LABEL, BROWSER_LOCATION_EVENT, display_url);
 }
 
+fn new_window_navigation_target(url: Url) -> Option<Url> {
+    is_allowed_browser_url(&url).then_some(url)
+}
+
 fn is_booth_entry(url: &Url) -> bool {
     url.scheme() == "https"
         && url.host_str() == Some("booth.pm")
@@ -948,7 +963,8 @@ mod tests {
     fn browser_locations_restore_booth_and_library_destinations_independently() {
         let locations = BrowserLocations::default();
         let library = Url::parse("https://accounts.booth.pm/library").unwrap();
-        let page_two = Url::parse("https://accounts.booth.pm/library?page=2").unwrap();
+        let page_two =
+            Url::parse("https://accounts.booth.pm/library/free_downloads?page=2").unwrap();
         let product = Url::parse("https://booth.pm/ja/items/123").unwrap();
         let booth_top = Url::parse("https://booth.pm/ja").unwrap();
 
@@ -1012,6 +1028,28 @@ mod tests {
             browser_url_for_display(&library).as_deref(),
             Some("https://accounts.booth.pm/library?page=12")
         );
+    }
+
+    #[test]
+    fn new_window_navigation_reuses_the_browser_only_for_allowed_urls() {
+        for allowed in [
+            "https://accounts.booth.pm/dashboard",
+            "https://accounts.booth.pm/library/free_downloads?page=1",
+            "https://sample-shop.booth.pm/items/123",
+            "https://accounts.pixiv.net/login",
+        ] {
+            let url = Url::parse(allowed).unwrap();
+            assert_eq!(new_window_navigation_target(url.clone()), Some(url));
+        }
+
+        for rejected in [
+            "http://accounts.booth.pm/dashboard",
+            "https://booth.pm.example.test/items/123",
+            "https://example.test/",
+            "about:blank",
+        ] {
+            assert!(new_window_navigation_target(Url::parse(rejected).unwrap()).is_none());
+        }
     }
 
     #[test]

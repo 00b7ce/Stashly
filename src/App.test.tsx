@@ -9,6 +9,7 @@ import {
   App,
   BrowserToolbar,
   BrowserDataConfirmationDialog,
+  browserViewForUrl,
   DeleteConfirmationDialog,
   LibraryRootConfirmationDialog,
   LibraryViewPicker,
@@ -65,6 +66,15 @@ describe("App navigation", () => {
     expect(markup).toContain("for BOOTH");
     expect(markup).toContain("BOOTH非公式アプリ");
     expect(markup).toContain("unofficial-short");
+  });
+
+  it("selects the BOOTH destination for product and dashboard locations", () => {
+    expect(browserViewForUrl("https://booth.pm/ja/items/3813504")).toBe("booth");
+    expect(browserViewForUrl("https://accounts.booth.pm/dashboard")).toBe("booth");
+    expect(browserViewForUrl("https://accounts.booth.pm/library/free_downloads?page=1"))
+      .toBe("booth-library");
+    expect(browserViewForUrl("https://accounts.pixiv.net/login")).toBeNull();
+    expect(browserViewForUrl("https://booth.pm.example.test/items/3813504")).toBeNull();
   });
 
   it("keeps the library heading, search, view controls, and refresh action together", () => {

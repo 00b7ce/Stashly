@@ -154,10 +154,9 @@
     }
   };
 
-  if (
-    window.location.origin !== BOOTH_LIBRARY_ORIGIN ||
-    !(window.location.pathname === "/library" || window.location.pathname.startsWith("/library/"))
-  ) return;
+  const isLibraryPage = () =>
+    window.location.origin === BOOTH_LIBRARY_ORIGIN &&
+    (window.location.pathname === "/library" || window.location.pathname.startsWith("/library/"));
 
   const normalize = (value) => (value || "").replace(/\s+/g, "").trim();
   const labelIs = (element, label) => normalize(element.textContent) === normalize(label);
@@ -222,16 +221,25 @@
     if (!downloadableId || !variationId) return null;
     return { href: url.href, downloadableId, variationId };
   };
-  const itemIdFromHref = (value) => {
+  const parseProductUrl = (value) => {
     let url;
     try { url = new URL(value, window.location.href); } catch { return null; }
     if (
       url.protocol !== "https:" ||
-      !(url.hostname === "booth.pm" || url.hostname.endsWith(".booth.pm"))
+      !(url.hostname === "booth.pm" || url.hostname.endsWith(".booth.pm")) ||
+      url.username ||
+      url.password ||
+      url.port
     ) return null;
     const match = url.pathname.match(/^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?items\/([1-9]\d*)\/?$/i);
-    return match ? positiveInteger(match[1]) : null;
+    const itemId = match ? positiveInteger(match[1]) : null;
+    if (!itemId) return null;
+    url.search = "";
+    url.hash = "";
+    return { href: url.href, itemId };
   };
+  const itemIdFromHref = (value) => parseProductUrl(value)?.itemId || null;
+  const currentProductItemId = () => itemIdFromHref(window.location.href);
   const findItemId = (element) => {
     let container = element;
     for (let depth = 0; container && depth < 12; depth += 1) {
@@ -270,6 +278,7 @@
   let directDownloadByControl = new WeakMap();
   const downloadKey = ({ downloadableId, variationId }) => `${downloadableId}:${variationId}`;
   const enhance = () => {
+    if (!isLibraryPage()) return;
     simplifyLibraryChrome();
     contextByDownload.clear();
     const nextDirectDownloads = new WeakMap();
@@ -338,28 +347,43 @@
       setTimeout(start, 0);
       return;
     }
-    const style = document.createElement("style");
-    style.textContent = `
-      .${HIDDEN_CLASS}, .${HIDDEN_CHROME_CLASS} { display: none !important; }
-      [data-label="${ALTERNATIVE_LABEL}"] { display: none !important; }
-      [${LIBRARY_MAIN_ATTRIBUTE}="true"] { margin-top: 0 !important; padding-top: 16px !important; }
-    `;
-    document.documentElement.appendChild(style);
+    if (isLibraryPage()) {
+      const style = document.createElement("style");
+      style.textContent = `
+        .${HIDDEN_CLASS}, .${HIDDEN_CHROME_CLASS} { display: none !important; }
+        [data-label="${ALTERNATIVE_LABEL}"] { display: none !important; }
+        [${LIBRARY_MAIN_ATTRIBUTE}="true"] { margin-top: 0 !important; padding-top: 16px !important; }
+      `;
+      document.documentElement.appendChild(style);
+    }
     document.addEventListener("click", (event) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
       const link = target.closest("a[href]");
       const control = target.closest('button, a, [role="button"], [role="menuitem"]');
       const download = link ? parseDownloadUrl(link.href) : directDownloadByControl.get(control);
-      if (!download) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      const itemId = contextByDownload.get(downloadKey(download)) || (link && findItemId(link));
-      if (!itemId) {
-        window.__boothShelfNotify({ requestId: crypto.randomUUID(), state: "failed" });
+      if (download) {
+        const pageItemId = currentProductItemId();
+        if (!pageItemId && !isLibraryPage()) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const itemId =
+          pageItemId ||
+          contextByDownload.get(downloadKey(download)) ||
+          (link && findItemId(link));
+        if (!itemId) {
+          window.__boothShelfNotify({ requestId: crypto.randomUUID(), state: "failed" });
+          return;
+        }
+        registerDownloadIntent(download, itemId);
         return;
       }
-      registerDownloadIntent(download, itemId);
+      if (!link || !isLibraryPage()) return;
+      const product = parseProductUrl(link.href);
+      if (!product) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      window.location.assign(product.href);
     }, true);
     let scheduled = false;
     const scheduleEnhance = () => {
@@ -370,11 +394,13 @@
         enhance();
       });
     };
-    new MutationObserver(scheduleEnhance).observe(document.documentElement, {
-      childList: true,
-      subtree: true,
-    });
-    scheduleEnhance();
+    if (isLibraryPage()) {
+      new MutationObserver(scheduleEnhance).observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+      });
+      scheduleEnhance();
+    }
   };
 
   start();
