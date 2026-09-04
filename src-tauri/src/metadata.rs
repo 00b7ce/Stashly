@@ -24,7 +24,7 @@ const MAX_HTML_BYTES: usize = 1024 * 1024;
 const METADATA_USER_AGENT: &str = concat!(
     "StashlyForBOOTH/",
     env!("CARGO_PKG_VERSION"),
-    " (+https://github.com/00b7ce/booth-manager)"
+    " (+https://github.com/00b7ce/stashly-for-booth)"
 );
 
 const FETCH_POLICY: MetadataFetchPolicy = MetadataFetchPolicy {
