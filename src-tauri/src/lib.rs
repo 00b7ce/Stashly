@@ -15,6 +15,8 @@ use crate::{db::Database, download::DownloadQueue, error::AppError};
 pub struct AppState {
     database: Database,
     download_queue: DownloadQueue,
+    browser_locations: webview::BrowserLocations,
+    active_download_notifications: webview::ActiveDownloadNotifications,
     completed_download_actions: webview::CompletedDownloadActions,
 }
 
@@ -33,6 +35,8 @@ pub fn run() {
             app.manage(AppState {
                 database: database.clone(),
                 download_queue: download_queue.clone(),
+                browser_locations: webview::BrowserLocations::default(),
+                active_download_notifications: webview::ActiveDownloadNotifications::default(),
                 completed_download_actions: webview::CompletedDownloadActions::default(),
             });
             tauri::async_runtime::spawn(download::run(

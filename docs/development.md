@@ -37,7 +37,7 @@ For a manual deeplink test, use a free item already present in the user's accoun
 - system, light, and dark theme choices update the local UI immediately and persist after restart;
 - preset and custom accent colors update local controls immediately, retain readable foreground contrast, and persist after restart;
 - BOOTH retains its official site styling regardless of the selected local application theme;
-- switching between local library, BOOTH top, BOOTH library, and Settings preserves the expected page and focus;
+- switching between local library, BOOTH, BOOTH library, and Settings preserves the expected page and focus, including each BOOTH destination's last loaded page during the current application session;
 - the local library heading, search field, view selector, and refresh action share one row; all three grid sizes and the horizontal list layout remain usable at the minimum window width;
 - the `booth-browser` child WebView cannot invoke local commands, dialogs, opener APIs, or filesystem functionality;
 - the normal BOOTH library download button starts the Booth Shelf flow and its paired alternative-download control is hidden;
@@ -45,6 +45,7 @@ For a manual deeplink test, use a free item already present in the user's accoun
 - no raw deeplink or signed URL appears in logs or SQLite;
 - the file lands under the selected test root;
 - the completed notification contains no filename, product ID, local path, or internal error text; its expiry bar decreases from right to left over six seconds, and clicking it still opens the downloaded product folder through an opaque one-time request ID;
+- navigating, going back or forward, and reloading while a download is queued or active restores one updating notification for each in-progress request;
 - a ZIP lands as an extracted directory and the original ZIP is absent;
 - traversal entries, links, more than 20,000 entries, and more than 16 GiB of expanded data are rejected without a partial final directory;
 - the global `booth-library-manager://` handler still points to the official application;

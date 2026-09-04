@@ -6,8 +6,8 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tauri::webview::NewWindowResponse;
-use tauri::{AppHandle, Manager, WebviewUrl, webview::WebviewBuilder};
+use tauri::webview::{NewWindowResponse, PageLoadEvent, WebviewBuilder};
+use tauri::{AppHandle, Manager, Runtime, Webview, WebviewUrl};
 use url::Url;
 
 use crate::{
@@ -31,6 +31,94 @@ const BOOTH_DOWNLOAD_BRIDGE: &str = include_str!("booth_download_bridge.js");
 struct BrowserDownloadStatus<'a> {
     request_id: &'a str,
     state: DownloadState,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct BrowserLocations {
+    locations: Arc<Mutex<BrowserLocationState>>,
+}
+
+#[derive(Default)]
+struct BrowserLocationState {
+    booth: Option<Url>,
+    library: Option<Url>,
+}
+
+impl BrowserLocations {
+    fn remember(&self, url: &Url) {
+        let Ok(mut locations) = self.locations.lock() else {
+            return;
+        };
+        if is_booth_library_page(url) {
+            locations.library = Some(url.clone());
+        } else if is_booth_page(url) {
+            locations.booth = Some(url.clone());
+        }
+    }
+
+    fn destination(&self, current: Option<&Url>, requested: &Url) -> Url {
+        if is_booth_library_entry(requested) {
+            if current.is_some_and(is_booth_library_page) {
+                return current.cloned().unwrap_or_else(|| requested.clone());
+            }
+            return self
+                .locations
+                .lock()
+                .ok()
+                .and_then(|locations| locations.library.clone())
+                .unwrap_or_else(|| requested.clone());
+        }
+
+        if is_booth_entry(requested) {
+            if current.is_some_and(is_booth_page) {
+                return current.cloned().unwrap_or_else(|| requested.clone());
+            }
+            return self
+                .locations
+                .lock()
+                .ok()
+                .and_then(|locations| locations.booth.clone())
+                .unwrap_or_else(|| requested.clone());
+        }
+
+        requested.clone()
+    }
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct ActiveDownloadNotifications {
+    statuses: Arc<Mutex<HashMap<String, DownloadState>>>,
+}
+
+impl ActiveDownloadNotifications {
+    pub(crate) fn update(&self, event: &DownloadStatusEvent) {
+        if uuid::Uuid::parse_str(&event.request_id).is_err() {
+            return;
+        }
+        let Ok(mut statuses) = self.statuses.lock() else {
+            return;
+        };
+        match event.state {
+            DownloadState::Queued | DownloadState::Downloading => {
+                statuses.insert(event.request_id.clone(), event.state);
+            }
+            DownloadState::Completed | DownloadState::Failed => {
+                statuses.remove(&event.request_id);
+            }
+        }
+    }
+
+    fn snapshot(&self) -> Vec<(String, DownloadState)> {
+        let Ok(statuses) = self.statuses.lock() else {
+            return Vec::new();
+        };
+        let mut snapshot = statuses
+            .iter()
+            .map(|(request_id, state)| (request_id.clone(), *state))
+            .collect::<Vec<_>>();
+        snapshot.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        snapshot
+    }
 }
 
 #[derive(Clone, Default)]
@@ -128,14 +216,19 @@ pub async fn show(
         return Err(AppError::RejectedDownloadUrl);
     }
     let bounds = bounds.validate()?;
+    let browser_locations = app.state::<crate::AppState>().browser_locations.clone();
     if let Some(webview) = app.get_webview(BROWSER_LABEL) {
         webview
             .set_position(bounds.position())
             .and_then(|_| webview.set_size(bounds.size()))
             .map_err(|error| AppError::InvalidPayload(error.to_string()))?;
-        webview
-            .navigate(target)
-            .map_err(|error| AppError::InvalidPayload(error.to_string()))?;
+        let current = webview.url().ok();
+        let destination = browser_locations.destination(current.as_ref(), &target);
+        if current.as_ref() != Some(&destination) {
+            webview
+                .navigate(destination)
+                .map_err(|error| AppError::InvalidPayload(error.to_string()))?;
+        }
         webview
             .show()
             .map_err(|error| AppError::InvalidPayload(error.to_string()))?;
@@ -148,6 +241,11 @@ pub async fn show(
     let profile_dir = profile_directory(&app)?;
     let callback_app = app.clone();
     let callback_sender = sender.clone();
+    let active_notifications = app
+        .state::<crate::AppState>()
+        .active_download_notifications
+        .clone();
+    let page_load_locations = browser_locations.clone();
     let last_blm_deeplink = Arc::new(Mutex::new(None));
     let navigation_state = last_blm_deeplink.clone();
 
@@ -217,6 +315,12 @@ pub async fn show(
                 false
             } else {
                 is_allowed_browser_url(url)
+            }
+        })
+        .on_page_load(move |webview, payload| {
+            if payload.event() == PageLoadEvent::Finished {
+                page_load_locations.remember(payload.url());
+                replay_download_notifications(&webview, &active_notifications);
             }
         })
         .on_new_window(|_, _| NewWindowResponse::Deny);
@@ -306,6 +410,25 @@ pub fn notify_download_status(app: &AppHandle, event: &DownloadStatusEvent) {
             .completed_download_actions
             .remember(&event.request_id, item_id, Instant::now());
     }
+    eval_download_notification(&webview, status);
+}
+
+fn replay_download_notifications<R: Runtime>(
+    webview: &Webview<R>,
+    notifications: &ActiveDownloadNotifications,
+) {
+    for (request_id, state) in notifications.snapshot() {
+        eval_download_notification(
+            webview,
+            BrowserDownloadStatus {
+                request_id: &request_id,
+                state,
+            },
+        );
+    }
+}
+
+fn eval_download_notification<R: Runtime>(webview: &Webview<R>, status: BrowserDownloadStatus<'_>) {
     let Ok(payload) = serde_json::to_string(&status) else {
         return;
     };
@@ -365,6 +488,32 @@ fn is_blm_announcement(url: &Url) -> bool {
     )
 }
 
+fn is_booth_entry(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str() == Some("booth.pm")
+        && url.path().trim_end_matches('/') == "/ja"
+        && url.query().is_none()
+        && url.fragment().is_none()
+}
+
+fn is_booth_library_entry(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str() == Some("accounts.booth.pm")
+        && url.path().trim_end_matches('/') == "/library"
+        && url.query().is_none()
+        && url.fragment().is_none()
+}
+
+fn is_booth_page(url: &Url) -> bool {
+    url.scheme() == "https" && url.host_str() == Some("booth.pm")
+}
+
+fn is_booth_library_page(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str() == Some("accounts.booth.pm")
+        && (url.path().trim_end_matches('/') == "/library" || url.path().starts_with("/library/"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,6 +551,104 @@ mod tests {
             &state,
             captured_at
         ));
+    }
+
+    #[test]
+    fn browser_locations_restore_booth_and_library_destinations_independently() {
+        let locations = BrowserLocations::default();
+        let library = Url::parse("https://accounts.booth.pm/library").unwrap();
+        let page_two = Url::parse("https://accounts.booth.pm/library?page=2").unwrap();
+        let product = Url::parse("https://booth.pm/ja/items/123").unwrap();
+        let booth_top = Url::parse("https://booth.pm/ja").unwrap();
+
+        locations.remember(&page_two);
+        locations.remember(&product);
+
+        assert_eq!(locations.destination(Some(&product), &library), page_two);
+        assert_eq!(locations.destination(Some(&page_two), &booth_top), product);
+    }
+
+    #[test]
+    fn browser_locations_keep_the_current_destination_and_honor_explicit_urls() {
+        let locations = BrowserLocations::default();
+        let library = Url::parse("https://accounts.booth.pm/library").unwrap();
+        let page_two = Url::parse("https://accounts.booth.pm/library?page=2").unwrap();
+        let product = Url::parse("https://booth.pm/ja/items/123").unwrap();
+        let other_product = Url::parse("https://booth.pm/ja/items/456").unwrap();
+        let booth_top = Url::parse("https://booth.pm/ja").unwrap();
+
+        locations.remember(&page_two);
+        locations.remember(&product);
+
+        assert_eq!(locations.destination(Some(&page_two), &library), page_two);
+        assert_eq!(locations.destination(Some(&product), &booth_top), product);
+        assert_eq!(
+            locations.destination(Some(&page_two), &other_product),
+            other_product
+        );
+    }
+
+    #[test]
+    fn browser_locations_ignore_authentication_and_unrelated_pages() {
+        let locations = BrowserLocations::default();
+        let library = Url::parse("https://accounts.booth.pm/library").unwrap();
+        let booth_top = Url::parse("https://booth.pm/ja").unwrap();
+        locations.remember(&Url::parse("https://accounts.pixiv.net/login").unwrap());
+        locations.remember(&Url::parse("https://accounts.booth.pm/settings").unwrap());
+
+        assert_eq!(locations.destination(None, &library), library);
+        assert_eq!(locations.destination(None, &booth_top), booth_top);
+    }
+
+    #[test]
+    fn active_download_notifications_are_replaced_and_removed_by_terminal_states() {
+        let notifications = ActiveDownloadNotifications::default();
+        let request_id = "7cf15df3-9714-4ff5-bf56-ab976127be9d";
+        let mut event = DownloadStatusEvent {
+            request_id: request_id.into(),
+            item_id: Some(3_848_152),
+            filename: Some("private-file.zip".into()),
+            state: DownloadState::Queued,
+            message: "Queued".into(),
+        };
+
+        notifications.update(&event);
+        assert_eq!(
+            notifications.snapshot(),
+            vec![(request_id.into(), DownloadState::Queued)]
+        );
+
+        event.state = DownloadState::Downloading;
+        notifications.update(&event);
+        assert_eq!(
+            notifications.snapshot(),
+            vec![(request_id.into(), DownloadState::Downloading)]
+        );
+
+        event.state = DownloadState::Completed;
+        notifications.update(&event);
+        assert!(notifications.snapshot().is_empty());
+
+        event.request_id = "027584e5-c497-44f2-830b-4172bed74a23".into();
+        event.state = DownloadState::Downloading;
+        notifications.update(&event);
+        event.state = DownloadState::Failed;
+        notifications.update(&event);
+        assert!(notifications.snapshot().is_empty());
+    }
+
+    #[test]
+    fn active_download_notifications_ignore_non_uuid_request_ids() {
+        let notifications = ActiveDownloadNotifications::default();
+        notifications.update(&DownloadStatusEvent {
+            request_id: "not-a-uuid".into(),
+            item_id: None,
+            filename: None,
+            state: DownloadState::Downloading,
+            message: "Downloading".into(),
+        });
+
+        assert!(notifications.snapshot().is_empty());
     }
 
     #[test]

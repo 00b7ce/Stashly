@@ -1,6 +1,6 @@
 [package]
 name = "booth-shelf"
-version = "1.0.0"
+version = "1.0.1"
 description = "An unofficial local library manager for BOOTH downloads"
 authors = ["mekabu"]
 license = "MIT"

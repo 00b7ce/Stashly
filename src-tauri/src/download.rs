@@ -11,7 +11,7 @@ use reqwest::header::CONTENT_DISPOSITION;
 use reqwest::redirect::{Attempt, Policy};
 use scraper::{Html, Selector};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::{
     fs,
     io::AsyncWriteExt,
@@ -731,6 +731,9 @@ pub fn emit(app: &AppHandle, request: &DownloadRequest, state: DownloadState, me
 }
 
 pub fn emit_event(app: &AppHandle, event: DownloadStatusEvent) {
+    app.state::<crate::AppState>()
+        .active_download_notifications
+        .update(&event);
     let _ = app.emit_to("main", DOWNLOAD_EVENT, event.clone());
     let notification_app = app.clone();
     tauri::async_runtime::spawn(async move {
