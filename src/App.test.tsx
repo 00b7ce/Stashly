@@ -10,6 +10,7 @@ import {
   BrowserToolbar,
   BrowserDataConfirmationDialog,
   DeleteConfirmationDialog,
+  LibraryRootConfirmationDialog,
   LibraryViewPicker,
   OFFICIAL_PRIVACY_URL,
   OFFICIAL_TERMS_URL,
@@ -60,6 +61,10 @@ describe("App navigation", () => {
     expect(markup).toContain("sidebar-settings");
     expect(markup.indexOf("sidebar-settings")).toBeLessThan(markup.indexOf("sidebar-toggle"));
     expect(markup).toContain("サイドバーを折りたたむ");
+    expect(markup).toContain("Stashly");
+    expect(markup).toContain("for BOOTH");
+    expect(markup).toContain("BOOTH非公式アプリ");
+    expect(markup).toContain("unofficial-short");
   });
 
   it("keeps the library heading, search, view controls, and refresh action together", () => {
@@ -134,6 +139,7 @@ describe("SettingsView", () => {
       <SettingsView
         appVersion="1.0.1"
         libraryRoot={null}
+        libraryStorage={null}
         themeMode="system"
         accentColor="#e76b8c"
         deleting={false}
@@ -152,10 +158,36 @@ describe("SettingsView", () => {
     expect(markup).toContain("バージョン");
     expect(markup).toContain("1.0.1");
     expect(markup).toContain("非公式アプリ");
-    expect(markup).toContain("Booth Shelfのサポート窓口ではありません");
+    expect(markup).toContain("Stashly for BOOTHのサポート窓口ではありません");
     expect(markup).toContain(`href="${OFFICIAL_TERMS_URL}"`);
     expect(markup).toContain(`href="${OFFICIAL_PRIVACY_URL}"`);
     expect(markup).not.toContain("BOOTH公式サポート");
+  });
+});
+
+describe("LibraryRootConfirmationDialog", () => {
+  it("requires an explicit acknowledgement for a non-local destination", () => {
+    const onConfirm = vi.fn();
+    render(
+      <LibraryRootConfirmationDialog
+        candidate={{
+          path: "\\\\nas\\private\\BOOTH",
+          kind: "network",
+          reasons: ["network_path"],
+        }}
+        saving={false}
+        onCancel={() => undefined}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    const confirm = screen.getByRole("button", { name: "理解して使用" });
+    expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("\\\\nas\\private\\BOOTH")).toBeTruthy();
+    fireEvent.click(screen.getByRole("checkbox"));
+    expect((confirm as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(confirm);
+    expect(onConfirm).toHaveBeenCalledOnce();
   });
 });
 

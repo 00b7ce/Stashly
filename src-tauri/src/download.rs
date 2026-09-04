@@ -187,7 +187,7 @@ fn build_metadata_client() -> AppResult<reqwest::Client> {
         .redirect(redirect_policy)
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(30))
-        .user_agent("BoothShelf/0.1")
+        .user_agent(concat!("StashlyForBOOTH/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|_| AppError::Network("could not initialize the metadata client".into()))
 }

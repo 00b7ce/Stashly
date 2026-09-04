@@ -146,7 +146,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "Booth Shelf v__VERSION__"
+          releaseName: "Stashly for BOOTH v__VERSION__"
           releaseBody: ${{ steps.release_body.outputs.body }}
           releaseDraft: true
           prerelease: false

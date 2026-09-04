@@ -128,7 +128,7 @@
     const copy = status.state === "completed"
       ? ["ダウンロード完了", "ダウンロードが完了しました。"]
       : status.state === "failed"
-        ? ["ダウンロード失敗", "詳細はBooth Shelfを確認してください。"]
+        ? ["ダウンロード失敗", "詳細はStashly for BOOTHを確認してください。"]
         : status.state === "downloading"
           ? ["ダウンロード中", "ダウンロードしています。"]
           : ["ダウンロード受付", "ダウンロードを受け付けました。"];

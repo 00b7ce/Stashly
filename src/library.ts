@@ -13,6 +13,14 @@ export type Product = {
 export type LibrarySnapshot = {
   products: Product[];
   libraryRoot: string | null;
+  libraryStorage: LibraryStorageSummary | null;
+};
+
+export type LibraryStorageKind = "local" | "network" | "sync" | "unknown";
+
+export type LibraryStorageSummary = {
+  kind: LibraryStorageKind;
+  nonLocalConfirmed: boolean;
 };
 
 export type DownloadState = "downloading" | "completed" | "failed";

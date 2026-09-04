@@ -148,7 +148,7 @@ mod tests {
         fs::create_dir(root.join(STAGING_DIRECTORY)).unwrap();
 
         let database = Database::initialize(temporary.path().join("test.db")).unwrap();
-        database.set_library_root(&root).unwrap();
+        database.set_library_root_with_opt_in(&root, None).unwrap();
         add_artifact(&database, &artifact);
 
         let result = delete_downloaded_files(&database, &root).unwrap();
@@ -173,7 +173,7 @@ mod tests {
         fs::write(&outside, b"keep").unwrap();
 
         let database = Database::initialize(temporary.path().join("test.db")).unwrap();
-        database.set_library_root(&root).unwrap();
+        database.set_library_root_with_opt_in(&root, None).unwrap();
         add_artifact(&database, &outside);
 
         assert!(delete_downloaded_files(&database, &root).is_err());

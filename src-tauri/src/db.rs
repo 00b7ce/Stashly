@@ -100,21 +100,57 @@ impl Database {
                 |row| row.get::<_, String>(0),
             )
             .optional()?;
-        Ok(AppSettings { library_root })
+        let library_root_opt_in_fingerprint = connection
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'library_root_opt_in_fingerprint'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(AppSettings {
+            library_root,
+            library_root_opt_in_fingerprint,
+        })
     }
 
-    pub fn set_library_root(&self, root: &Path) -> AppResult<()> {
+    pub fn set_library_root_with_opt_in(
+        &self,
+        root: &Path,
+        opt_in_fingerprint: Option<&str>,
+    ) -> AppResult<()> {
         if !root.is_absolute() {
             return Err(AppError::InvalidLibraryRoot(root.to_path_buf()));
         }
         let value = root.to_string_lossy();
-        let connection = self.open()?;
-        connection.execute(
+        let mut connection = self.open()?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
             "INSERT INTO settings(key, value) VALUES ('library_root', ?1) \
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [value.as_ref()],
         )?;
+        if let Some(fingerprint) = opt_in_fingerprint {
+            transaction.execute(
+                "INSERT INTO settings(key, value) VALUES ('library_root_opt_in_fingerprint', ?1) \
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [fingerprint],
+            )?;
+        } else {
+            transaction.execute(
+                "DELETE FROM settings WHERE key = 'library_root_opt_in_fingerprint'",
+                [],
+            )?;
+        }
+        transaction.commit()?;
         Ok(())
+    }
+
+    pub fn has_artifacts(&self) -> AppResult<bool> {
+        let connection = self.open()?;
+        let count = connection.query_row("SELECT COUNT(*) FROM artifacts", [], |row| {
+            row.get::<_, i64>(0)
+        })?;
+        Ok(count > 0)
     }
 
     pub fn upsert_product(&self, input: &UpsertProductInput) -> AppResult<()> {
@@ -306,12 +342,78 @@ mod tests {
         let database = Database::initialize(directory.path().join("test.db")).expect("database");
         let root = directory.path().join("library");
 
-        database.set_library_root(&root).expect("set root");
+        database
+            .set_library_root_with_opt_in(&root, None)
+            .expect("set root");
 
         assert_eq!(
             database.settings().expect("settings").library_root,
             Some(root.to_string_lossy().into_owned())
         );
+        assert_eq!(
+            database
+                .settings()
+                .expect("settings")
+                .library_root_opt_in_fingerprint,
+            None
+        );
+    }
+
+    #[test]
+    fn atomically_replaces_or_clears_the_root_opt_in() {
+        let directory = tempdir().expect("tempdir");
+        let database = Database::initialize(directory.path().join("test.db")).expect("database");
+        let first_root = directory.path().join("first");
+        let second_root = directory.path().join("second");
+
+        database
+            .set_library_root_with_opt_in(&first_root, Some("first-fingerprint"))
+            .expect("set root with opt-in");
+        let settings = database.settings().expect("settings");
+        assert_eq!(
+            settings.library_root_opt_in_fingerprint.as_deref(),
+            Some("first-fingerprint")
+        );
+
+        database
+            .set_library_root_with_opt_in(&second_root, None)
+            .expect("replace with local root");
+        let settings = database.settings().expect("settings");
+        assert_eq!(
+            settings.library_root,
+            Some(second_root.to_string_lossy().into_owned())
+        );
+        assert_eq!(settings.library_root_opt_in_fingerprint, None);
+    }
+
+    #[test]
+    fn reports_whether_artifacts_are_registered() {
+        let directory = tempdir().expect("tempdir");
+        let database = Database::initialize(directory.path().join("test.db")).expect("database");
+        assert!(!database.has_artifacts().expect("no artifacts"));
+
+        let request = DownloadRequest {
+            request_id: "request-1".into(),
+            item_id: 123,
+            variation_id: 456,
+            downloadable_id: None,
+            product_name: Some("Example".into()),
+            shop_name: Some("Shop".into()),
+            filename: "package.zip".into(),
+        };
+        database
+            .ensure_download_metadata(&request)
+            .expect("metadata");
+        database
+            .record_artifact(
+                "artifact-1",
+                &request,
+                directory.path().join("package").as_path(),
+                "hash",
+                1,
+            )
+            .expect("artifact");
+        assert!(database.has_artifacts().expect("has artifacts"));
     }
 
     #[test]

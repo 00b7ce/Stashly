@@ -5,6 +5,7 @@ mod download;
 mod error;
 mod model;
 mod security;
+mod storage;
 mod webview;
 
 use tauri::Manager;
@@ -26,6 +27,16 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            #[cfg(debug_assertions)]
+            let data_dir = std::env::var_os("STASHLY_DEV_DATA_DIR")
+                .map(std::path::PathBuf::from)
+                .map(Ok)
+                .unwrap_or_else(|| {
+                    app.path()
+                        .app_local_data_dir()
+                        .map_err(|_| AppError::MissingAppDataDirectory)
+                })?;
+            #[cfg(not(debug_assertions))]
             let data_dir = app
                 .path()
                 .app_local_data_dir()
@@ -54,5 +65,5 @@ pub fn run() {
             commands::delete_downloaded_files,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Booth Shelf");
+        .expect("error while running Stashly for BOOTH");
 }

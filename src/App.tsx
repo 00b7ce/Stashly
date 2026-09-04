@@ -42,10 +42,16 @@ import {
   mergeDownloadStatus,
   type DownloadStatus,
   type LibrarySnapshot,
+  type LibraryStorageKind,
+  type LibraryStorageSummary,
   type Product,
 } from "./library";
 
-const EMPTY_LIBRARY: LibrarySnapshot = { products: [], libraryRoot: null };
+const EMPTY_LIBRARY: LibrarySnapshot = {
+  products: [],
+  libraryRoot: null,
+  libraryStorage: null,
+};
 const BOOTH_TOP_URL = "https://booth.pm/ja";
 const BOOTH_LIBRARY_URL = "https://accounts.booth.pm/library";
 const BROWSER_LOCATION_EVENT = "booth-browser-location";
@@ -140,6 +146,16 @@ type DeleteLibraryResult = {
   removedPaths: number;
 };
 
+export type LibraryRootCandidate = {
+  path: string;
+  kind: Exclude<LibraryStorageKind, "local">;
+  reasons: string[];
+};
+
+type SetLibraryRootResult =
+  | { status: "saved"; library: LibrarySnapshot }
+  | { status: "confirmation_required"; candidate: LibraryRootCandidate };
+
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -162,6 +178,8 @@ export function App() {
   const [clearingBrowserData, setClearingBrowserData] = useState(false);
   const [browserDataConfirmationOpen, setBrowserDataConfirmationOpen] = useState(false);
   const [browserDataMessage, setBrowserDataMessage] = useState<string | null>(null);
+  const [pendingLibraryRoot, setPendingLibraryRoot] = useState<LibraryRootCandidate | null>(null);
+  const [savingLibraryRoot, setSavingLibraryRoot] = useState(false);
   const [browserUrl, setBrowserUrl] = useState(BOOTH_TOP_URL);
   const [appVersion, setAppVersion] = useState("取得中…");
   const contentRef = useRef<HTMLElement>(null);
@@ -355,20 +373,35 @@ export function App() {
     };
   }, [browserBounds, browserViewActive]);
 
-  async function chooseLibraryRoot(): Promise<boolean> {
-    const selected = await open({ directory: true, multiple: false });
-    if (!selected) return false;
+  async function saveLibraryRoot(root: string, allowNonLocal: boolean): Promise<boolean> {
+    setSavingLibraryRoot(true);
     try {
-      setLibrary(
-        await invoke<LibrarySnapshot>("set_library_root", { root: selected }),
-      );
+      const result = await invoke<SetLibraryRootResult>("set_library_root", {
+        root,
+        allowNonLocal,
+      });
+      if (result.status === "confirmation_required") {
+        setPendingLibraryRoot(result.candidate);
+        setError(null);
+        return false;
+      }
+      setLibrary(result.library);
+      setPendingLibraryRoot(null);
       setCleanupMessage(null);
       setError(null);
       return true;
     } catch (reason) {
       setError(errorText(reason));
       return false;
+    } finally {
+      setSavingLibraryRoot(false);
     }
+  }
+
+  async function chooseLibraryRoot(): Promise<boolean> {
+    const selected = await open({ directory: true, multiple: false });
+    if (!selected) return false;
+    return saveLibraryRoot(selected, false);
   }
 
   async function openBooth(view: "booth" | "booth-library", initialUrl: string) {
@@ -445,7 +478,7 @@ export function App() {
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark"><Box size={22} strokeWidth={2.2} /></div>
-          <div className="brand-copy"><strong>Booth Shelf</strong><span>Local library</span></div>
+          <div className="brand-copy"><strong>Stashly <span>for BOOTH</span></strong><small>Local asset library</small></div>
         </div>
 
         <nav className="nav-list" aria-label="メインナビゲーション">
@@ -490,7 +523,7 @@ export function App() {
           {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
           <span className="nav-label">折りたたむ</span>
         </button>
-        <p className="unofficial">非公式クライアント · データは端末内のみ</p>
+        <p className="unofficial"><span className="unofficial-full">BOOTH非公式アプリ</span><span className="unofficial-short">非公式</span></p>
       </aside>
 
       <main
@@ -523,6 +556,7 @@ export function App() {
           <SettingsView
             appVersion={appVersion}
             libraryRoot={library.libraryRoot}
+            libraryStorage={library.libraryStorage}
             themeMode={themeMode}
             accentColor={accentColor}
             deleting={deleting}
@@ -609,6 +643,15 @@ export function App() {
           <BrowserDataConfirmationDialog
             onCancel={() => setBrowserDataConfirmationOpen(false)}
             onConfirm={() => void confirmClearBrowserData()}
+          />
+        )}
+
+        {pendingLibraryRoot && (
+          <LibraryRootConfirmationDialog
+            candidate={pendingLibraryRoot}
+            saving={savingLibraryRoot}
+            onCancel={() => setPendingLibraryRoot(null)}
+            onConfirm={() => void saveLibraryRoot(pendingLibraryRoot.path, true)}
           />
         )}
       </main>
@@ -804,7 +847,7 @@ export function DeleteConfirmationDialog({ libraryRoot, onCancel, onConfirm }: {
         <p className="eyebrow">DESTRUCTIVE ACTION</p>
         <h2 id="delete-dialog-title">ダウンロード済みファイルを削除しますか？</h2>
         <p id="delete-dialog-description">
-          Booth Shelfが記録しているファイルと展開フォルダをすべて削除します。この操作は元に戻せません。管理対象外のファイルは削除しません。
+          Stashly for BOOTHが記録しているファイルと展開フォルダをすべて削除します。この操作は元に戻せません。管理対象外のファイルは削除しません。
         </p>
         <div className="confirmation-path"><span>保存先</span><code>{libraryRoot}</code></div>
       </div>
@@ -841,7 +884,7 @@ export function BrowserDataConfirmationDialog({ onCancel, onConfirm }: {
         <p className="eyebrow">PRIVACY DATA</p>
         <h2 id="browser-data-dialog-title">BOOTHブラウザーの個人データを削除しますか？</h2>
         <p id="browser-data-dialog-description">
-          専用WebViewに保存されたCookie、キャッシュ、閲覧履歴、ローカルストレージなどを削除します。BOOTHとpixivからログアウトします。ダウンロード済みファイルとBooth Shelfのライブラリ登録は削除しません。
+          専用WebViewに保存されたCookie、キャッシュ、閲覧履歴、ローカルストレージなどを削除します。BOOTHとpixivからログアウトします。ダウンロード済みファイルとStashly for BOOTHのライブラリ登録は削除しません。
         </p>
       </div>
       <div className="confirmation-actions">
@@ -852,9 +895,74 @@ export function BrowserDataConfirmationDialog({ onCancel, onConfirm }: {
   </div>;
 }
 
-export function SettingsView({ appVersion, libraryRoot, themeMode, accentColor, deleting, cleanupMessage, clearingBrowserData, browserDataMessage, onChooseRoot, onThemeChange, onAccentColorChange, onDelete, onClearBrowserData, onOpenOfficialInformation }: {
+const STORAGE_KIND_LABELS: Record<LibraryStorageKind, string> = {
+  local: "ローカル保存先",
+  network: "ネットワーク保存先",
+  sync: "同期フォルダー",
+  unknown: "種類を確認できない保存先",
+};
+
+export function LibraryRootConfirmationDialog({ candidate, saving, onCancel, onConfirm }: {
+  candidate: LibraryRootCandidate;
+  saving: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const [acknowledged, setAcknowledged] = useState(false);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    cancelRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !saving) onCancel();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onCancel, saving]);
+
+  return <div
+    className="modal-backdrop"
+    onMouseDown={(event) => event.target === event.currentTarget && !saving && onCancel()}
+  >
+    <section className="confirmation-dialog storage-confirmation" role="alertdialog" aria-modal="true" aria-labelledby="storage-dialog-title" aria-describedby="storage-dialog-description">
+      <div className="confirmation-icon storage-warning-icon"><TriangleAlert size={25} /></div>
+      <div className="confirmation-copy">
+        <p className="eyebrow">EXTERNAL STORAGE</p>
+        <h2 id="storage-dialog-title">{STORAGE_KIND_LABELS[candidate.kind]}を使用しますか？</h2>
+        <p id="storage-dialog-description">
+          この保存先はローカル固定ドライブとして確認できませんでした。次の点を理解した場合だけ使用してください。
+        </p>
+        <ul className="storage-warning-list">
+          <li>購入者本人以外がアクセスできないことを確認してください。</li>
+          <li>切断、遅延、同期競合によってダウンロードや展開が失敗する場合があります。</li>
+          <li>同期サービスはバックアップの代わりにはなりません。</li>
+        </ul>
+        <div className="confirmation-path"><span>保存先</span><code>{candidate.path}</code></div>
+        <label className="storage-acknowledgement">
+          <input
+            type="checkbox"
+            checked={acknowledged}
+            disabled={saving}
+            onChange={(event) => setAcknowledged(event.currentTarget.checked)}
+          />
+          <span>リスクを理解し、この保存先を自分の責任で使用します。</span>
+        </label>
+      </div>
+      <div className="confirmation-actions">
+        <button ref={cancelRef} className="modal-cancel" type="button" onClick={onCancel} disabled={saving}>キャンセル</button>
+        <button className="modal-confirm" type="button" onClick={onConfirm} disabled={!acknowledged || saving}>
+          {saving ? <LoaderCircle size={17} className="spin" /> : <CheckCircle2 size={17} />}
+          {saving ? "確認しています…" : "理解して使用"}
+        </button>
+      </div>
+    </section>
+  </div>;
+}
+
+export function SettingsView({ appVersion, libraryRoot, libraryStorage, themeMode, accentColor, deleting, cleanupMessage, clearingBrowserData, browserDataMessage, onChooseRoot, onThemeChange, onAccentColorChange, onDelete, onClearBrowserData, onOpenOfficialInformation }: {
   appVersion: string;
   libraryRoot: string | null;
+  libraryStorage: LibraryStorageSummary | null;
   themeMode: ThemeMode;
   accentColor: string;
   deleting: boolean;
@@ -873,7 +981,7 @@ export function SettingsView({ appVersion, libraryRoot, themeMode, accentColor, 
       <div className="settings-icon"><Moon size={22} /></div>
       <div className="settings-body">
         <h2>外観</h2>
-        <p>Booth Shelfの表示テーマを選択します。BOOTHサイトには適用されません。</p>
+        <p>Stashly for BOOTHの表示テーマを選択します。BOOTHサイトには適用されません。</p>
         <ThemePicker value={themeMode} onChange={onThemeChange} />
         <div className="appearance-divider" />
         <div className="appearance-subheading"><Palette size={17} /><h3>アクセントカラー</h3></div>
@@ -890,6 +998,11 @@ export function SettingsView({ appVersion, libraryRoot, themeMode, accentColor, 
         <div className={`path-display ${libraryRoot ? "" : "unset"}`} title={libraryRoot ?? undefined}>
           {libraryRoot ?? "保存先が設定されていません"}
         </div>
+        {libraryStorage && <div className={`storage-status ${libraryStorage.kind === "local" ? "local" : "external"}`}>
+          {libraryStorage.kind === "local"
+            ? "ローカル固定ドライブ"
+            : `${STORAGE_KIND_LABELS[libraryStorage.kind]} · ${libraryStorage.nonLocalConfirmed ? "確認済み" : "再確認が必要"}`}
+        </div>}
         <button className="secondary-button" onClick={onChooseRoot}>
           <FolderOpen size={17} />{libraryRoot ? "保存先を変更" : "保存先を選択"}
         </button>
@@ -900,14 +1013,14 @@ export function SettingsView({ appVersion, libraryRoot, themeMode, accentColor, 
       <div className="settings-icon"><Info size={22} /></div>
       <div className="settings-body">
         <h2>このアプリについて</h2>
-        <p>Booth Shelfはピクシブ株式会社、BOOTH、pixivとは提携・承認・協賛関係のない非公式アプリです。</p>
+        <p>Stashly for BOOTHはピクシブ株式会社、BOOTH、pixivとは提携・承認・協賛関係のない非公式アプリです。</p>
         <dl className="version-information">
           <dt>バージョン</dt>
           <dd>{appVersion}</dd>
         </dl>
         <div className="official-information">
           <h3>BOOTH・pixiv公式情報（外部サイト）</h3>
-          <p>以下はBOOTH・pixivの公式文書です。Booth Shelfのサポート窓口ではありません。</p>
+          <p>以下はBOOTH・pixivの公式文書です。Stashly for BOOTHのサポート窓口ではありません。</p>
           <nav aria-label="BOOTH・pixiv公式情報">
             <a href={OFFICIAL_TERMS_URL} onClick={(event) => { event.preventDefault(); onOpenOfficialInformation(OFFICIAL_TERMS_URL); }}>
               <span><strong>サービス利用規約</strong><small>booth.pm</small></span><ExternalLink size={16} />
@@ -937,7 +1050,7 @@ export function SettingsView({ appVersion, libraryRoot, themeMode, accentColor, 
       <div className="settings-icon danger-icon"><Trash2 size={22} /></div>
       <div className="settings-body">
         <h2>データの削除</h2>
-        <p>Booth ShelfがDBに記録したダウンロード済みファイル・展開フォルダとライブラリ登録を削除します。保存先そのものや、管理対象外のファイルは残します。</p>
+        <p>Stashly for BOOTHがDBに記録したダウンロード済みファイル・展開フォルダとライブラリ登録を削除します。保存先そのものや、管理対象外のファイルは残します。</p>
         {cleanupMessage && <div className="success-banner"><CheckCircle2 size={17} />{cleanupMessage}</div>}
         <button className="danger-button" onClick={onDelete} disabled={!libraryRoot || deleting}>
           {deleting ? <LoaderCircle size={17} className="spin" /> : <Trash2 size={17} />}

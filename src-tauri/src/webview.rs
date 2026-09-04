@@ -682,17 +682,8 @@ fn prepare_native_download(
             return Err(AppError::DownloadsInProgress);
         }
     };
-    let root = state
-        .database
-        .settings()?
-        .library_root
-        .map(PathBuf::from)
-        .ok_or(AppError::MissingLibraryRoot)?;
-    if !root.is_absolute() {
-        return Err(AppError::InvalidLibraryRoot(root));
-    }
-    std::fs::create_dir_all(&root)?;
-    let root = std::fs::canonicalize(root)?;
+    let root = state.database.settings()?;
+    let root = crate::storage::validate_configured_library_root(&root)?;
 
     for existing in state.database.artifact_paths_for_download(&request)? {
         if let Ok(existing) = std::fs::canonicalize(existing)

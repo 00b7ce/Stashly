@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Booth Shelf",
+  "productName": "Stashly for BOOTH",
   "version": "1.0.1",
   "identifier": "io.mekabu.booth-shelf",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Booth Shelf",
+        "title": "Stashly for BOOTH",
         "width": 1280,
         "height": 820,
         "minWidth": 900,

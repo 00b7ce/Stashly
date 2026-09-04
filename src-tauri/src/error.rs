@@ -8,6 +8,12 @@ pub enum AppError {
     MissingLibraryRoot,
     #[error("The selected path is not an absolute directory: {0}")]
     InvalidLibraryRoot(PathBuf),
+    #[error("The selected library location is unavailable or not writable: {0}")]
+    LibraryRootUnavailable(PathBuf),
+    #[error("Shared or synchronized library storage must be explicitly confirmed")]
+    NonLocalLibraryRootNotConfirmed,
+    #[error("The library location cannot be changed while downloaded files are registered")]
+    LibraryRootContainsArtifacts,
     #[error("The requested product is not in the local library")]
     ProductNotFound,
     #[error("The requested path is outside the configured library root")]
