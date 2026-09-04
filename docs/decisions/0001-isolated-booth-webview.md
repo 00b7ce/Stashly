@@ -8,7 +8,7 @@ Accepted
 
 BOOTH runs in a dedicated persistent Tauri WebView whose window label is excluded from every capability. The trusted local React window is the only window allowed to invoke custom commands, dialogs, or opener functionality.
 
-The remote WebView may navigate only to HTTPS origins under `booth.pm` and `pixiv.net`. Top-level `booth-library-manager://` navigation is validated and cancelled before Windows can dispatch it to the globally registered official client. A completed download notification may navigate once to the internal folder action with a short-lived opaque UUID; no item ID or local path is exposed to the page. The global protocol registration is not changed.
+The remote WebView may navigate only to HTTPS origins under `booth.pm` and `pixiv.net`. A standard BOOTH download is armed by one strict, short-lived `booth-shelf://download-intent` navigation and transferred by the WebView into app-owned staging; the remote page receives no command capability or local path. A completed download notification may navigate once to the internal folder action with a short-lived opaque UUID; no item ID or local path is exposed to the page. The global `booth-library-manager://` protocol registration is not read or changed.
 
 ## Consequences
 

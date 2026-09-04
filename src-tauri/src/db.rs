@@ -346,7 +346,6 @@ mod tests {
             product_name: Some("Example".into()),
             shop_name: Some("Shop".into()),
             filename: "package.zip".into(),
-            signed_url: url::Url::parse("https://s6.booth.pm/package.zip").unwrap(),
         };
         database
             .ensure_download_metadata(&request)
@@ -385,7 +384,6 @@ mod tests {
             product_name: Some("Example".into()),
             shop_name: Some("Shop".into()),
             filename: "package.zip".into(),
-            signed_url: url::Url::parse("https://s6.booth.pm/package.zip").unwrap(),
         };
         database
             .ensure_download_metadata(&request)

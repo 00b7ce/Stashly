@@ -107,11 +107,9 @@ fn prune_empty_parents(root: &Path, start: &Path) {
 
 #[cfg(test)]
 mod tests {
-    use tempfile::tempdir;
-    use url::Url;
-
     use super::*;
     use crate::model::{DownloadRequest, UpsertProductInput};
+    use tempfile::tempdir;
 
     fn add_artifact(database: &Database, path: &Path) {
         database
@@ -132,7 +130,6 @@ mod tests {
             product_name: Some("Example".into()),
             shop_name: Some("Shop".into()),
             filename: "package.zip".into(),
-            signed_url: Url::parse("https://s6.booth.pm/example").unwrap(),
         };
         database.ensure_download_metadata(&request).unwrap();
         database

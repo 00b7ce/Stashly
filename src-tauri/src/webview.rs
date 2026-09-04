@@ -6,16 +6,15 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tauri::webview::{NewWindowResponse, PageLoadEvent, WebviewBuilder};
+use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder};
 use tauri::{AppHandle, Emitter, Manager, Runtime, Webview, WebviewUrl};
 use url::Url;
 
 use crate::{
-    deeplink,
-    download::{self, DownloadQueue, EnqueueError},
+    download::{self, DownloadPermit, EnqueueError},
     error::{AppError, AppResult},
-    model::{DownloadState, DownloadStatusEvent},
-    security::is_allowed_browser_url,
+    model::{DownloadRequest, DownloadState, DownloadStatusEvent},
+    security::{ensure_within_root, is_allowed_browser_url, safe_filename},
 };
 
 pub const BROWSER_LABEL: &str = "booth-browser";
@@ -23,7 +22,8 @@ const MAIN_WINDOW_LABEL: &str = "main";
 const BROWSER_LOCATION_EVENT: &str = "booth-browser-location";
 const LOCAL_ACTION_SCHEME: &str = "booth-shelf";
 const OPEN_FOLDER_ACTION_HOST: &str = "open-product-folder";
-const BLM_FALLBACK_WINDOW: Duration = Duration::from_secs(10);
+const DOWNLOAD_INTENT_ACTION_HOST: &str = "download-intent";
+const DOWNLOAD_INTENT_LIFETIME: Duration = Duration::from_secs(10);
 const COMPLETED_ACTION_LIFETIME: Duration = Duration::from_secs(30);
 const BOOTH_DOWNLOAD_BRIDGE: &str = include_str!("booth_download_bridge.js");
 
@@ -100,7 +100,7 @@ impl ActiveDownloadNotifications {
             return;
         };
         match event.state {
-            DownloadState::Queued | DownloadState::Downloading => {
+            DownloadState::Downloading => {
                 statuses.insert(event.request_id.clone(), event.state);
             }
             DownloadState::Completed | DownloadState::Failed => {
@@ -130,6 +130,85 @@ pub(crate) struct CompletedDownloadActions {
 struct CompletedDownloadAction {
     item_id: i64,
     created_at: Instant,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct NativeDownloads {
+    state: Arc<Mutex<NativeDownloadState>>,
+}
+
+#[derive(Default)]
+struct NativeDownloadState {
+    intent: Option<NativeDownloadIntent>,
+    pending: HashMap<PathBuf, PendingNativeDownload>,
+}
+
+#[derive(Clone)]
+struct NativeDownloadIntent {
+    request_id: String,
+    item_id: i64,
+    variation_id: i64,
+    downloadable_id: i64,
+    created_at: Instant,
+}
+
+struct PendingNativeDownload {
+    request: DownloadRequest,
+    root: PathBuf,
+    staging_path: PathBuf,
+    source_url: Url,
+    permit: DownloadPermit,
+}
+
+impl NativeDownloads {
+    fn arm(&self, intent: NativeDownloadIntent, now: Instant) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        if state.intent.as_ref().is_some_and(|current| {
+            now.duration_since(current.created_at) <= DOWNLOAD_INTENT_LIFETIME
+        }) {
+            return false;
+        }
+        state.intent = Some(intent);
+        true
+    }
+
+    fn take_intent(&self, now: Instant) -> Option<NativeDownloadIntent> {
+        let mut state = self.state.lock().ok()?;
+        let intent = state.intent.take()?;
+        (now.duration_since(intent.created_at) <= DOWNLOAD_INTENT_LIFETIME).then_some(intent)
+    }
+
+    fn insert_pending(&self, path: PathBuf, pending: PendingNativeDownload) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        if state.pending.contains_key(&path) {
+            return false;
+        }
+        state.pending.insert(path, pending);
+        true
+    }
+
+    fn take_pending(&self, path: Option<&Path>, url: &Url) -> Option<PendingNativeDownload> {
+        let mut state = self.state.lock().ok()?;
+        if let Some(path) = path
+            && let Some(pending) = state.pending.remove(path)
+        {
+            return Some(pending);
+        }
+        let matching = state
+            .pending
+            .iter()
+            .filter(|(_, pending)| pending.source_url == *url)
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
+        if matching.len() != 1 {
+            return None;
+        }
+        state.pending.remove(&matching[0])
+    }
 }
 
 impl CompletedDownloadActions {
@@ -206,12 +285,7 @@ impl BrowserBounds {
     }
 }
 
-pub async fn show(
-    app: AppHandle,
-    sender: DownloadQueue,
-    initial_url: String,
-    bounds: BrowserBounds,
-) -> AppResult<()> {
+pub async fn show(app: AppHandle, initial_url: String, bounds: BrowserBounds) -> AppResult<()> {
     let target = Url::parse(&initial_url)?;
     if !is_allowed_browser_url(&target) {
         return Err(AppError::RejectedDownloadUrl);
@@ -242,16 +316,16 @@ pub async fn show(
 
     let profile_dir = profile_directory(&app)?;
     let callback_app = app.clone();
-    let callback_sender = sender.clone();
     let active_notifications = app
         .state::<crate::AppState>()
         .active_download_notifications
         .clone();
+    let native_downloads = app.state::<crate::AppState>().native_downloads.clone();
+    let download_callback_app = app.clone();
+    let download_callback_state = native_downloads.clone();
     let page_load_locations = browser_locations.clone();
     let page_load_app = app.clone();
     let initial_location = target.clone();
-    let last_blm_deeplink = Arc::new(Mutex::new(None));
-    let navigation_state = last_blm_deeplink.clone();
 
     let builder = WebviewBuilder::new(BROWSER_LABEL, WebviewUrl::External(target))
         .data_directory(profile_dir)
@@ -270,52 +344,21 @@ pub async fn show(
                                 crate::commands::open_product_folder_for_app(item_id, &action_app);
                         }
                     });
-                }
-                false
-            } else if deeplink::is_booth_library_manager_link(url) {
-                if let Ok(mut last_seen) = navigation_state.lock() {
-                    *last_seen = Some(Instant::now());
-                }
-                match deeplink::parse(url) {
-                    Ok(requests) => {
-                        for request in requests {
-                            match callback_sender.try_send(request.clone()) {
-                                Ok(()) => download::emit(
-                                    &callback_app,
-                                    &request,
-                                    DownloadState::Queued,
-                                    "Added to the download queue",
-                                ),
-                                Err(EnqueueError::CleanupActive) => download::emit(
-                                    &callback_app,
-                                    &request,
-                                    DownloadState::Failed,
-                                    "Downloaded files are currently being deleted",
-                                ),
-                                Err(EnqueueError::Unavailable) => download::emit(
-                                    &callback_app,
-                                    &request,
-                                    DownloadState::Failed,
-                                    "The download queue is full",
-                                ),
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        download::emit_event(
-                            &callback_app,
-                            DownloadStatusEvent {
-                                request_id: String::new(),
-                                item_id: None,
-                                filename: None,
-                                state: DownloadState::Failed,
-                                message: error.to_string(),
-                            },
-                        );
+                } else if url.host_str() == Some(DOWNLOAD_INTENT_ACTION_HOST) {
+                    let request_id = download_intent_request_id(url);
+                    let accepted = download_intent_from_url(url)
+                        .is_some_and(|intent| native_downloads.arm(intent, Instant::now()));
+                    if let Some(request_id) = request_id {
+                        let acknowledgement_app = callback_app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            acknowledge_download_intent(
+                                &acknowledgement_app,
+                                &request_id,
+                                accepted,
+                            );
+                        });
                     }
                 }
-                false
-            } else if should_suppress_blm_fallback(url, &navigation_state, Instant::now()) {
                 false
             } else {
                 let allowed = is_allowed_browser_url(url);
@@ -324,6 +367,9 @@ pub async fn show(
                 }
                 allowed
             }
+        })
+        .on_download(move |_, event| {
+            handle_native_download(&download_callback_app, &download_callback_state, event)
         })
         .on_page_load(move |webview, payload| {
             if payload.event() == PageLoadEvent::Finished {
@@ -445,6 +491,246 @@ fn eval_download_notification<R: Runtime>(webview: &Webview<R>, status: BrowserD
     let _ = webview.eval(format!("window.__boothShelfNotify?.({payload});"));
 }
 
+fn download_intent_request_id(url: &Url) -> Option<String> {
+    url.query_pairs()
+        .find_map(|(key, value)| (key == "request_id").then(|| value.into_owned()))
+        .and_then(|value| uuid::Uuid::parse_str(&value).ok())
+        .map(|value| value.to_string())
+}
+
+fn download_intent_from_url(url: &Url) -> Option<NativeDownloadIntent> {
+    if url.as_str().len() > 512
+        || url.scheme() != LOCAL_ACTION_SCHEME
+        || url.host_str() != Some(DOWNLOAD_INTENT_ACTION_HOST)
+        || !matches!(url.path(), "" | "/")
+        || url.fragment().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+    {
+        return None;
+    }
+
+    let pairs = url.query_pairs().collect::<Vec<_>>();
+    if pairs.len() != 4 {
+        return None;
+    }
+    let value = |expected: &str| {
+        let matches = pairs
+            .iter()
+            .filter(|(key, _)| key == expected)
+            .map(|(_, value)| value.as_ref())
+            .collect::<Vec<_>>();
+        (matches.len() == 1).then_some(matches[0])
+    };
+    let parse_id = |name| value(name)?.parse::<i64>().ok().filter(|id| *id > 0);
+    let request_id = uuid::Uuid::parse_str(value("request_id")?)
+        .ok()?
+        .to_string();
+    Some(NativeDownloadIntent {
+        request_id,
+        item_id: parse_id("item_id")?,
+        variation_id: parse_id("variation_id")?,
+        downloadable_id: parse_id("downloadable_id")?,
+        created_at: Instant::now(),
+    })
+}
+
+fn acknowledge_download_intent(app: &AppHandle, request_id: &str, accepted: bool) {
+    let Some(webview) = app.get_webview(BROWSER_LABEL) else {
+        return;
+    };
+    let Ok(request_id) = serde_json::to_string(request_id) else {
+        return;
+    };
+    let callback = if accepted {
+        "__boothShelfAcceptDownloadIntent"
+    } else {
+        "__boothShelfRejectDownloadIntent"
+    };
+    let _ = webview.eval(format!("window.{callback}?.({request_id});"));
+}
+
+fn handle_native_download(
+    app: &AppHandle,
+    native_downloads: &NativeDownloads,
+    event: DownloadEvent<'_>,
+) -> bool {
+    match event {
+        DownloadEvent::Requested { url, destination } => {
+            let Some(intent) = native_downloads.take_intent(Instant::now()) else {
+                return false;
+            };
+            let request = match prepare_native_download(app, &intent, &url, destination) {
+                Ok(Some(pending)) => pending,
+                Ok(None) => return false,
+                Err(error) => {
+                    emit_intent_failure(app, &intent, error.to_string());
+                    return false;
+                }
+            };
+            let path = destination.clone();
+            if !native_downloads.insert_pending(path, request) {
+                emit_intent_failure(app, &intent, "the download could not be reserved".into());
+                return false;
+            }
+            if let Ok(state) = native_downloads.state.lock()
+                && let Some(pending) = state.pending.get(destination.as_path())
+            {
+                download::emit(
+                    app,
+                    &pending.request,
+                    DownloadState::Downloading,
+                    "Downloading",
+                );
+            }
+            true
+        }
+        DownloadEvent::Finished { url, path, success } => {
+            let Some(pending) = native_downloads.take_pending(path.as_deref(), &url) else {
+                return false;
+            };
+            if !success {
+                let _ = std::fs::remove_file(&pending.staging_path);
+                download::emit(
+                    app,
+                    &pending.request,
+                    DownloadState::Failed,
+                    "The BOOTH download did not complete",
+                );
+                return false;
+            }
+            let task_app = app.clone();
+            tauri::async_runtime::spawn(download::finish_native_download(
+                task_app,
+                app.state::<crate::AppState>().database.clone(),
+                pending.request,
+                pending.root,
+                pending.staging_path,
+                pending.permit,
+            ));
+            true
+        }
+        _ => false,
+    }
+}
+
+fn prepare_native_download(
+    app: &AppHandle,
+    intent: &NativeDownloadIntent,
+    url: &Url,
+    destination: &mut PathBuf,
+) -> AppResult<Option<PendingNativeDownload>> {
+    if !native_download_url_matches(url, intent) {
+        return Err(AppError::RejectedDownloadUrl);
+    }
+    let filename = destination
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or(AppError::UnsafeFilename)
+        .and_then(safe_filename)?;
+    let request = DownloadRequest {
+        request_id: intent.request_id.clone(),
+        item_id: intent.item_id,
+        variation_id: intent.variation_id,
+        downloadable_id: Some(intent.downloadable_id),
+        product_name: None,
+        shop_name: None,
+        filename,
+    };
+    let state = app.state::<crate::AppState>();
+    let permit = match state.download_queue.try_reserve() {
+        Ok(permit) => permit,
+        Err(EnqueueError::CleanupActive) => {
+            return Err(AppError::LibraryCleanupInProgress);
+        }
+        Err(EnqueueError::Unavailable) => {
+            return Err(AppError::DownloadsInProgress);
+        }
+    };
+    let root = state
+        .database
+        .settings()?
+        .library_root
+        .map(PathBuf::from)
+        .ok_or(AppError::MissingLibraryRoot)?;
+    if !root.is_absolute() {
+        return Err(AppError::InvalidLibraryRoot(root));
+    }
+    std::fs::create_dir_all(&root)?;
+    let root = std::fs::canonicalize(root)?;
+
+    for existing in state.database.artifact_paths_for_download(&request)? {
+        if let Ok(existing) = std::fs::canonicalize(existing)
+            && ensure_within_root(&root, &existing).is_ok()
+        {
+            download::emit(
+                app,
+                &request,
+                DownloadState::Completed,
+                "Already downloaded",
+            );
+            return Ok(None);
+        }
+    }
+
+    let staging_dir = root.join(".booth-shelf-staging");
+    ensure_within_root(&root, &staging_dir)?;
+    std::fs::create_dir_all(&staging_dir)?;
+    let staging_dir = std::fs::canonicalize(staging_dir)?;
+    ensure_within_root(&root, &staging_dir)?;
+    let staging_path = staging_dir.join(format!("{}.part", intent.request_id));
+    ensure_within_root(&root, &staging_path)?;
+    if staging_path.exists() {
+        return Err(AppError::InvalidPayload(
+            "the download staging path is already in use".into(),
+        ));
+    }
+    *destination = staging_path;
+    Ok(Some(PendingNativeDownload {
+        request,
+        root,
+        staging_path: destination.clone(),
+        source_url: url.clone(),
+        permit,
+    }))
+}
+
+fn native_download_url_matches(url: &Url, intent: &NativeDownloadIntent) -> bool {
+    if url.scheme() != "https" {
+        return false;
+    }
+    if url.host_str() == Some("s6.booth.pm") {
+        return true;
+    }
+    if url.host_str() != Some("booth.pm") {
+        return false;
+    }
+    let expected_path = format!("/downloadables/{}", intent.downloadable_id);
+    if url.path().trim_end_matches('/') != expected_path {
+        return false;
+    }
+    let variations = url
+        .query_pairs()
+        .filter(|(key, _)| key == "variation_id")
+        .map(|(_, value)| value.into_owned())
+        .collect::<Vec<_>>();
+    variations.len() == 1 && variations[0] == intent.variation_id.to_string()
+}
+
+fn emit_intent_failure(app: &AppHandle, intent: &NativeDownloadIntent, message: String) {
+    download::emit_event(
+        app,
+        DownloadStatusEvent {
+            request_id: intent.request_id.clone(),
+            item_id: Some(intent.item_id),
+            filename: None,
+            state: DownloadState::Failed,
+            message,
+        },
+    );
+}
+
 fn open_folder_request_id(url: &Url) -> Option<String> {
     if url.scheme() != LOCAL_ACTION_SCHEME
         || url.host_str() != Some(OPEN_FOLDER_ACTION_HOST)
@@ -508,31 +794,6 @@ fn emit_browser_location(app: &AppHandle, url: &Url) {
     let _ = app.emit_to(MAIN_WINDOW_LABEL, BROWSER_LOCATION_EVENT, display_url);
 }
 
-fn should_suppress_blm_fallback(
-    url: &Url,
-    last_blm_deeplink: &Mutex<Option<Instant>>,
-    now: Instant,
-) -> bool {
-    if !is_blm_announcement(url) {
-        return false;
-    }
-    last_blm_deeplink
-        .lock()
-        .ok()
-        .and_then(|last_seen| *last_seen)
-        .is_some_and(|last_seen| now.duration_since(last_seen) <= BLM_FALLBACK_WINDOW)
-}
-
-fn is_blm_announcement(url: &Url) -> bool {
-    if url.scheme() != "https" || url.host_str() != Some("booth.pm") {
-        return false;
-    }
-    matches!(
-        url.path().trim_end_matches('/'),
-        "/announcements/893" | "/ja/announcements/893"
-    )
-}
-
 fn is_booth_entry(url: &Url) -> bool {
     url.scheme() == "https"
         && url.host_str() == Some("booth.pm")
@@ -566,36 +827,82 @@ mod tests {
     const MAIN_CAPABILITY: &str = include_str!("../capabilities/main.json");
 
     #[test]
-    fn suppresses_blm_announcement_only_just_after_a_deeplink() {
-        let captured_at = Instant::now();
-        let state = Mutex::new(Some(captured_at));
-        let announcement = Url::parse("https://booth.pm/announcements/893").unwrap();
+    fn download_intent_accepts_only_exact_positive_fields() {
+        let request_id = "7cf15df3-9714-4ff5-bf56-ab976127be9d";
+        let valid = Url::parse(&format!(
+            "booth-shelf://download-intent?request_id={request_id}&item_id=123&variation_id=456&downloadable_id=789"
+        ))
+        .unwrap();
+        let intent = download_intent_from_url(&valid).unwrap();
+        assert_eq!(intent.request_id, request_id);
+        assert_eq!(intent.item_id, 123);
+        assert_eq!(intent.variation_id, 456);
+        assert_eq!(intent.downloadable_id, 789);
 
-        assert!(should_suppress_blm_fallback(
-            &announcement,
-            &state,
-            captured_at + Duration::from_secs(2)
-        ));
-        assert!(!should_suppress_blm_fallback(
-            &announcement,
-            &state,
-            captured_at + Duration::from_secs(11)
-        ));
+        for invalid in [
+            "booth-shelf://download-intent?request_id=bad&item_id=1&variation_id=2&downloadable_id=3",
+            "booth-shelf://download-intent?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d&item_id=0&variation_id=2&downloadable_id=3",
+            "booth-shelf://download-intent?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d&item_id=1&variation_id=2&downloadable_id=3&extra=4",
+            "booth-shelf://download-intent/path?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d&item_id=1&variation_id=2&downloadable_id=3",
+            "https://accounts.booth.pm/library?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d&item_id=1&variation_id=2&downloadable_id=3",
+        ] {
+            assert!(download_intent_from_url(&Url::parse(invalid).unwrap()).is_none());
+        }
     }
 
     #[test]
-    fn allows_other_announcements_and_lookalike_hosts() {
-        let captured_at = Instant::now();
-        let state = Mutex::new(Some(captured_at));
-        let other = Url::parse("https://booth.pm/announcements/970").unwrap();
-        let lookalike = Url::parse("https://booth.pm.example.test/announcements/893").unwrap();
+    fn download_intent_is_one_shot_and_expires() {
+        let downloads = NativeDownloads::default();
+        let now = Instant::now();
+        let intent = NativeDownloadIntent {
+            request_id: "7cf15df3-9714-4ff5-bf56-ab976127be9d".into(),
+            item_id: 123,
+            variation_id: 456,
+            downloadable_id: 789,
+            created_at: now,
+        };
 
-        assert!(!should_suppress_blm_fallback(&other, &state, captured_at));
-        assert!(!should_suppress_blm_fallback(
-            &lookalike,
-            &state,
-            captured_at
+        assert!(downloads.arm(intent.clone(), now));
+        assert_eq!(downloads.take_intent(now).unwrap().item_id, 123);
+        assert!(downloads.take_intent(now).is_none());
+
+        assert!(downloads.arm(intent, now));
+        assert!(
+            downloads
+                .take_intent(now + DOWNLOAD_INTENT_LIFETIME + Duration::from_secs(1))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn native_download_url_is_bound_to_the_armed_download() {
+        let intent = NativeDownloadIntent {
+            request_id: "7cf15df3-9714-4ff5-bf56-ab976127be9d".into(),
+            item_id: 123,
+            variation_id: 456,
+            downloadable_id: 789,
+            created_at: Instant::now(),
+        };
+
+        assert!(native_download_url_matches(
+            &Url::parse("https://booth.pm/downloadables/789?variation_id=456").unwrap(),
+            &intent
         ));
+        assert!(native_download_url_matches(
+            &Url::parse("https://s6.booth.pm/signed-response").unwrap(),
+            &intent
+        ));
+        for rejected in [
+            "https://booth.pm/downloadables/790?variation_id=456",
+            "https://booth.pm/downloadables/789?variation_id=457",
+            "https://s6.booth.pm.example.test/signed-response",
+            "http://s6.booth.pm/signed-response",
+        ] {
+            assert!(!native_download_url_matches(
+                &Url::parse(rejected).unwrap(),
+                &intent
+            ));
+        }
     }
 
     #[test]
@@ -676,14 +983,14 @@ mod tests {
             request_id: request_id.into(),
             item_id: Some(3_848_152),
             filename: Some("private-file.zip".into()),
-            state: DownloadState::Queued,
+            state: DownloadState::Downloading,
             message: "Queued".into(),
         };
 
         notifications.update(&event);
         assert_eq!(
             notifications.snapshot(),
-            vec![(request_id.into(), DownloadState::Queued)]
+            vec![(request_id.into(), DownloadState::Downloading)]
         );
 
         event.state = DownloadState::Downloading;
@@ -722,19 +1029,19 @@ mod tests {
     #[test]
     fn download_bridge_is_origin_scoped_and_does_not_expose_tauri_ipc() {
         assert!(BOOTH_DOWNLOAD_BRIDGE.contains("https://accounts.booth.pm"));
-        assert!(BOOTH_DOWNLOAD_BRIDGE.contains("booth-library-manager://"));
+        assert!(!BOOTH_DOWNLOAD_BRIDGE.contains("booth-library-manager://"));
+        assert!(BOOTH_DOWNLOAD_BRIDGE.contains("booth-shelf://download-intent"));
         assert!(!BOOTH_DOWNLOAD_BRIDGE.contains("data-booth-shelf-theme"));
         assert!(!BOOTH_DOWNLOAD_BRIDGE.contains("__TAURI__"));
         assert!(!BOOTH_DOWNLOAD_BRIDGE.contains("invoke("));
     }
 
     #[test]
-    fn download_bridge_dismisses_menus_with_additional_actions() {
-        assert!(
-            BOOTH_DOWNLOAD_BRIDGE
-                .contains("normalize(overlay.textContent).includes(normalize(BLM_LABEL))")
-        );
-        assert!(!BOOTH_DOWNLOAD_BRIDGE.contains("labelIs(overlay, BLM_LABEL)"));
+    fn download_bridge_uses_the_official_download_url_after_acknowledgement() {
+        assert!(BOOTH_DOWNLOAD_BRIDGE.contains("downloadables"));
+        assert!(BOOTH_DOWNLOAD_BRIDGE.contains("variation_id"));
+        assert!(BOOTH_DOWNLOAD_BRIDGE.contains("__boothShelfAcceptDownloadIntent"));
+        assert!(BOOTH_DOWNLOAD_BRIDGE.contains("window.location.assign(pending.href)"));
     }
 
     #[test]
@@ -751,7 +1058,7 @@ mod tests {
     #[test]
     fn download_bridge_hides_the_library_footer() {
         assert!(BOOTH_DOWNLOAD_BRIDGE.contains("'footer, [role=\"contentinfo\"]'"));
-        assert!(BOOTH_DOWNLOAD_BRIDGE.contains("hideLibraryFooter();"));
+        assert!(BOOTH_DOWNLOAD_BRIDGE.contains("footer.classList.add(HIDDEN_CHROME_CLASS)"));
     }
 
     #[test]

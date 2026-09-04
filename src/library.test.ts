@@ -31,19 +31,19 @@ describe("filterProducts", () => {
 
 describe("mergeDownloadStatus", () => {
   it("replaces earlier states from the same download", () => {
-    const queued: DownloadStatus = {
+    const downloading: DownloadStatus = {
       requestId: "request-1",
       itemId: 12345,
       filename: "package.zip",
-      state: "queued",
-      message: "Queued",
+      state: "downloading",
+      message: "Downloading",
     };
     const completed: DownloadStatus = {
-      ...queued,
+      ...downloading,
       state: "completed",
       message: "Completed",
     };
 
-    expect(mergeDownloadStatus([queued], completed)).toEqual([completed]);
+    expect(mergeDownloadStatus([downloading], completed)).toEqual([completed]);
   });
 });

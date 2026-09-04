@@ -7,7 +7,7 @@ Booth Shelf is an unofficial Windows desktop library manager for files downloade
 ## Architecture
 
 - `src/`: React and TypeScript local management UI.
-- `src-tauri/src/`: Rust application core, WebView policy, deeplink parsing, SQLite storage, and downloads.
+- `src-tauri/src/`: Rust application core, WebView policy, native WebView downloads, SQLite storage, and post-processing.
 - `docs/architecture.md`: trust boundaries and data flow.
 - `docs/development.md`: setup and verification commands.
 
@@ -27,14 +27,14 @@ The local `main` WebView may invoke explicitly exposed Tauri commands. The remot
 
 ## Safety constraints
 
-- Treat all remote page content and deeplink payloads as untrusted.
-- Never log or persist signed download URLs, session cookies, CSRF tokens, order IDs, or raw deeplink payloads.
+- Treat all remote page content, download intents, and filenames as untrusted.
+- Never log or persist signed download URLs, session cookies, CSRF tokens, order IDs, or raw download-intent payloads.
 - Permit remote navigation only to reviewed BOOTH and pixiv authentication hosts.
 - Downloads must enter a staging directory, be hashed, and be atomically moved into a path proven to be inside the configured library root.
 - Sanitize every remote filename and reject traversal, device names, alternate data streams, and absolute paths.
 - ZIP extraction must occur only in the application staging directory, reject traversal and links, enforce entry and expanded-size limits, and publish the extracted directory atomically. Never execute extracted files.
 - Deletion is out of scope until a Recycle Bin workflow with explicit confirmation exists.
-- Fail closed if the private BLM deeplink format changes; ordinary browser-download interception is not part of the initial release.
+- Accept native downloads only after a validated, short-lived intent from the BOOTH library; fail closed if the DOM or ordinary download-link shape changes.
 
 ## Git and verification
 

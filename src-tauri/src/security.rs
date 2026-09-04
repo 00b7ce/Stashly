@@ -81,16 +81,6 @@ pub fn is_allowed_browser_url(url: &url::Url) -> bool {
         || host.ends_with(".pixiv.net")
 }
 
-pub fn is_allowed_download_url(url: &url::Url) -> bool {
-    if url.scheme() != "https" {
-        return false;
-    }
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    host == "s6.booth.pm"
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

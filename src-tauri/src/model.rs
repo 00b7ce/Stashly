@@ -40,7 +40,6 @@ pub struct DownloadStatusEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DownloadState {
-    Queued,
     Downloading,
     Completed,
     Failed,
@@ -55,7 +54,6 @@ pub struct DownloadRequest {
     pub product_name: Option<String>,
     pub shop_name: Option<String>,
     pub filename: String,
-    pub signed_url: url::Url,
 }
 
 #[derive(Debug, Clone, Deserialize)]

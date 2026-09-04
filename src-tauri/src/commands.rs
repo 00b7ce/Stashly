@@ -70,9 +70,8 @@ pub async fn open_booth_browser(
     initial_url: String,
     bounds: webview::BrowserBounds,
     app: AppHandle,
-    state: State<'_, AppState>,
 ) -> AppResult<()> {
-    webview::show(app, state.download_queue.clone(), initial_url, bounds).await
+    webview::show(app, initial_url, bounds).await
 }
 
 #[tauri::command]

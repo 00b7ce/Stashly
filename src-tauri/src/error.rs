@@ -12,15 +12,13 @@ pub enum AppError {
     ProductNotFound,
     #[error("The requested path is outside the configured library root")]
     PathOutsideLibrary,
-    #[error("The BOOTH link format is not supported")]
-    UnsupportedDeepLink,
     #[error("The BOOTH download URL was rejected")]
     RejectedDownloadUrl,
     #[error("The download filename is not safe")]
     UnsafeFilename,
     #[error("The download exceeds the configured size limit")]
     DownloadTooLarge,
-    #[error("Downloads are still queued or running. Wait for them to finish before deleting files")]
+    #[error("Downloads are still running. Wait for them to finish before deleting files")]
     DownloadsInProgress,
     #[error("Downloaded files are already being deleted")]
     LibraryCleanupInProgress,
@@ -34,7 +32,7 @@ pub enum AppError {
     Network(String),
     #[error("URL is invalid: {0}")]
     Url(#[from] url::ParseError),
-    #[error("Invalid deeplink payload: {0}")]
+    #[error("Invalid payload: {0}")]
     InvalidPayload(String),
 }
 

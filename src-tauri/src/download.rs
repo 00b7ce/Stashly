@@ -5,18 +5,11 @@ use std::{
     time::Duration,
 };
 
-use futures_util::StreamExt;
-use percent_encoding::percent_decode_str;
-use reqwest::header::CONTENT_DISPOSITION;
 use reqwest::redirect::{Attempt, Policy};
 use scraper::{Html, Selector};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::{
-    fs,
-    io::AsyncWriteExt,
-    sync::{Semaphore, mpsc},
-};
+use tokio::{fs, io::AsyncReadExt};
 use url::Url;
 use uuid::Uuid;
 
@@ -25,9 +18,7 @@ use crate::{
     error::{AppError, AppResult},
     model::UpsertProductInput,
     model::{DownloadRequest, DownloadState, DownloadStatusEvent},
-    security::{
-        ensure_within_root, is_allowed_browser_url, is_allowed_download_url, product_directory,
-    },
+    security::{ensure_within_root, is_allowed_browser_url, product_directory},
 };
 
 pub const DOWNLOAD_EVENT: &str = "download-status";
@@ -47,9 +38,8 @@ pub enum EnqueueError {
     Unavailable,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct DownloadQueue {
-    sender: mpsc::Sender<DownloadRequest>,
     state: Arc<Mutex<QueueState>>,
 }
 
@@ -57,27 +47,23 @@ pub struct CleanupGuard {
     state: Arc<Mutex<QueueState>>,
 }
 
-struct PendingGuard {
+pub(crate) struct DownloadPermit {
     state: Arc<Mutex<QueueState>>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum ProcessOutcome {
-    Downloaded(PathBuf),
-    AlreadyDownloaded(PathBuf),
-}
-
 impl DownloadQueue {
-    pub fn try_send(&self, request: DownloadRequest) -> Result<(), EnqueueError> {
+    pub(crate) fn try_reserve(&self) -> Result<DownloadPermit, EnqueueError> {
         let mut state = self.state.lock().map_err(|_| EnqueueError::Unavailable)?;
         if state.cleanup_active {
             return Err(EnqueueError::CleanupActive);
         }
-        self.sender
-            .try_send(request)
-            .map_err(|_| EnqueueError::Unavailable)?;
+        if state.pending >= 2 {
+            return Err(EnqueueError::Unavailable);
+        }
         state.pending += 1;
-        Ok(())
+        Ok(DownloadPermit {
+            state: self.state.clone(),
+        })
     }
 
     pub fn begin_cleanup(&self) -> AppResult<CleanupGuard> {
@@ -96,12 +82,6 @@ impl DownloadQueue {
             state: self.state.clone(),
         })
     }
-
-    fn pending_guard(&self) -> PendingGuard {
-        PendingGuard {
-            state: self.state.clone(),
-        }
-    }
 }
 
 impl Drop for CleanupGuard {
@@ -112,7 +92,7 @@ impl Drop for CleanupGuard {
     }
 }
 
-impl Drop for PendingGuard {
+impl Drop for DownloadPermit {
     fn drop(&mut self) {
         if let Ok(mut state) = self.state.lock() {
             state.pending = state.pending.saturating_sub(1);
@@ -120,92 +100,79 @@ impl Drop for PendingGuard {
     }
 }
 
-pub fn channel() -> (DownloadQueue, mpsc::Receiver<DownloadRequest>) {
-    let (sender, receiver) = mpsc::channel(32);
-    (
-        DownloadQueue {
-            sender,
-            state: Arc::new(Mutex::new(QueueState::default())),
-        },
-        receiver,
-    )
-}
-
-pub async fn run(
+pub(crate) async fn finish_native_download(
     app: AppHandle,
     database: Database,
-    queue: DownloadQueue,
-    mut receiver: mpsc::Receiver<DownloadRequest>,
+    request: DownloadRequest,
+    root: PathBuf,
+    staging_path: PathBuf,
+    _permit: DownloadPermit,
 ) {
-    let client = match build_client() {
-        Ok(client) => client,
-        Err(error) => {
-            eprintln!("failed to initialize the download client: {error}");
-            return;
-        }
-    };
-    let metadata_client = match build_metadata_client() {
-        Ok(client) => client,
-        Err(error) => {
-            eprintln!("failed to initialize the metadata client: {error}");
-            return;
-        }
+    let result = hash_native_staging_file(&root, &staging_path).await;
+    let result = match result {
+        Ok((hash, byte_size)) => match build_metadata_client() {
+            Ok(metadata_client) => {
+                finalize_download(
+                    &metadata_client,
+                    &database,
+                    &request,
+                    &root,
+                    &staging_path,
+                    &hash,
+                    byte_size,
+                    None,
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(error),
     };
 
-    let slots = Arc::new(Semaphore::new(2));
-    while let Some(request) = receiver.recv().await {
-        let pending_guard = queue.pending_guard();
-        let Ok(permit) = slots.clone().try_acquire_owned() else {
-            emit(
-                &app,
-                &request,
-                DownloadState::Failed,
-                "Two downloads are already active. Please click download again after they finish.",
-            );
-            continue;
-        };
-        let task_app = app.clone();
-        let task_database = database.clone();
-        let task_client = client.clone();
-        let task_metadata_client = metadata_client.clone();
-        tauri::async_runtime::spawn(async move {
-            let _pending_guard = pending_guard;
-            let _permit = permit;
-            emit(
-                &task_app,
-                &request,
-                DownloadState::Downloading,
-                "Downloading",
-            );
-            match process(
-                &task_client,
-                &task_metadata_client,
-                &task_database,
-                &request,
-            )
-            .await
-            {
-                Ok(ProcessOutcome::Downloaded(_)) => emit(
-                    &task_app,
-                    &request,
-                    DownloadState::Completed,
-                    "Download completed",
-                ),
-                Ok(ProcessOutcome::AlreadyDownloaded(_)) => emit(
-                    &task_app,
-                    &request,
-                    DownloadState::Completed,
-                    "Already downloaded",
-                ),
-                Err(error) => emit(
-                    &task_app,
-                    &request,
-                    DownloadState::Failed,
-                    &error.to_string(),
-                ),
-            }
-        });
+    match result {
+        Ok(_) => emit(
+            &app,
+            &request,
+            DownloadState::Completed,
+            "Download completed",
+        ),
+        Err(error) => {
+            let _ = fs::remove_file(&staging_path).await;
+            let _ = fs::remove_dir_all(staging_path.with_extension("extracting")).await;
+            emit(&app, &request, DownloadState::Failed, &error.to_string());
+        }
     }
+}
+
+async fn hash_native_staging_file(root: &Path, staging_path: &Path) -> AppResult<(String, u64)> {
+    let metadata = fs::symlink_metadata(staging_path).await?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(AppError::PathOutsideLibrary);
+    }
+    if metadata.len() > MAX_DOWNLOAD_BYTES {
+        return Err(AppError::DownloadTooLarge);
+    }
+    let resolved = fs::canonicalize(staging_path).await?;
+    ensure_within_root(root, &resolved)?;
+
+    let mut file = fs::File::open(&resolved).await?;
+    let mut hasher = Sha256::new();
+    let mut byte_size = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        byte_size = byte_size
+            .checked_add(read as u64)
+            .ok_or(AppError::DownloadTooLarge)?;
+        if byte_size > MAX_DOWNLOAD_BYTES {
+            return Err(AppError::DownloadTooLarge);
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok((hex::encode(hasher.finalize()), byte_size))
 }
 
 fn build_metadata_client() -> AppResult<reqwest::Client> {
@@ -223,84 +190,6 @@ fn build_metadata_client() -> AppResult<reqwest::Client> {
         .user_agent("BoothShelf/0.1")
         .build()
         .map_err(|_| AppError::Network("could not initialize the metadata client".into()))
-}
-
-fn build_client() -> AppResult<reqwest::Client> {
-    let redirect_policy = Policy::custom(|attempt: Attempt<'_>| {
-        if attempt.previous().len() >= 5 || !is_allowed_download_url(attempt.url()) {
-            attempt.stop()
-        } else {
-            attempt.follow()
-        }
-    });
-    reqwest::Client::builder()
-        .redirect(redirect_policy)
-        .connect_timeout(Duration::from_secs(20))
-        .timeout(Duration::from_secs(30 * 60))
-        .user_agent("BoothShelf/0.1")
-        .build()
-        .map_err(|_| AppError::Network("could not initialize the HTTP client".into()))
-}
-
-async fn process(
-    client: &reqwest::Client,
-    metadata_client: &reqwest::Client,
-    database: &Database,
-    request: &DownloadRequest,
-) -> AppResult<ProcessOutcome> {
-    let settings = database.settings()?;
-    let root = settings
-        .library_root
-        .map(PathBuf::from)
-        .ok_or(AppError::MissingLibraryRoot)?;
-    if !root.is_absolute() {
-        return Err(AppError::InvalidLibraryRoot(root));
-    }
-    fs::create_dir_all(&root).await?;
-    let root = fs::canonicalize(root).await?;
-
-    for existing_path in database.artifact_paths_for_download(request)? {
-        if !fs::try_exists(&existing_path).await? {
-            continue;
-        }
-        let existing_path = fs::canonicalize(existing_path).await?;
-        if ensure_within_root(&root, &existing_path).is_ok() {
-            return Ok(ProcessOutcome::AlreadyDownloaded(existing_path));
-        }
-    }
-
-    let staging_dir = root.join(".booth-shelf-staging");
-    ensure_within_root(&root, &staging_dir)?;
-    fs::create_dir_all(&staging_dir).await?;
-    let staging_dir = fs::canonicalize(staging_dir).await?;
-    ensure_within_root(&root, &staging_dir)?;
-    let staging_path = staging_dir.join(format!("{}.part", Uuid::new_v4()));
-
-    let result = download_to_staging(client, request, &staging_path).await;
-    let (hash, byte_size, response_filename) = match result {
-        Ok(result) => result,
-        Err(error) => {
-            let _ = fs::remove_file(&staging_path).await;
-            return Err(error);
-        }
-    };
-
-    let finalized = finalize_download(
-        metadata_client,
-        database,
-        request,
-        &root,
-        &staging_path,
-        &hash,
-        byte_size,
-        response_filename,
-    )
-    .await;
-    if finalized.is_err() {
-        let _ = fs::remove_file(&staging_path).await;
-        let _ = fs::remove_dir_all(staging_path.with_extension("extracting")).await;
-    }
-    finalized.map(ProcessOutcome::Downloaded)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -644,79 +533,6 @@ fn parse_product_metadata(
     })
 }
 
-async fn download_to_staging(
-    client: &reqwest::Client,
-    request: &DownloadRequest,
-    staging_path: &Path,
-) -> AppResult<(String, u64, Option<String>)> {
-    let response = client
-        .get(request.signed_url.clone())
-        .send()
-        .await
-        .map_err(|_| AppError::Network("the BOOTH request failed".into()))?;
-    if !is_allowed_download_url(response.url()) {
-        return Err(AppError::RejectedDownloadUrl);
-    }
-    let response = response
-        .error_for_status()
-        .map_err(|_| AppError::Network("BOOTH returned an unsuccessful status".into()))?;
-    let response_filename = response
-        .headers()
-        .get(CONTENT_DISPOSITION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(filename_from_content_disposition);
-    if response
-        .content_length()
-        .is_some_and(|size| size > MAX_DOWNLOAD_BYTES)
-    {
-        return Err(AppError::DownloadTooLarge);
-    }
-
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(staging_path)
-        .await?;
-    let mut stream = response.bytes_stream();
-    let mut hasher = Sha256::new();
-    let mut byte_size = 0_u64;
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| AppError::Network("the download was interrupted".into()))?;
-        byte_size = byte_size
-            .checked_add(chunk.len() as u64)
-            .ok_or(AppError::DownloadTooLarge)?;
-        if byte_size > MAX_DOWNLOAD_BYTES {
-            return Err(AppError::DownloadTooLarge);
-        }
-        hasher.update(&chunk);
-        file.write_all(&chunk).await?;
-    }
-    file.flush().await?;
-    file.sync_all().await?;
-    Ok((hex::encode(hasher.finalize()), byte_size, response_filename))
-}
-
-fn filename_from_content_disposition(value: &str) -> Option<String> {
-    let parts = value.split(';').map(str::trim);
-    for part in parts.clone() {
-        if let Some(encoded) = part.strip_prefix("filename*=UTF-8''") {
-            let decoded = percent_decode_str(encoded).decode_utf8().ok()?;
-            if let Ok(filename) = crate::security::safe_filename(&decoded) {
-                return Some(filename);
-            }
-        }
-    }
-    for part in parts {
-        if let Some(filename) = part.strip_prefix("filename=") {
-            let filename = filename.trim_matches('"');
-            if let Ok(filename) = crate::security::safe_filename(filename) {
-                return Some(filename);
-            }
-        }
-    }
-    None
-}
-
 pub fn emit(app: &AppHandle, request: &DownloadRequest, state: DownloadState, message: &str) {
     emit_event(
         app,
@@ -744,15 +560,13 @@ pub fn emit_event(app: &AppHandle, event: DownloadStatusEvent) {
 #[cfg(test)]
 mod tests {
     use std::io::Write as _;
-    use url::Url;
 
     use super::{
-        EnqueueError, ProcessOutcome, build_client, build_metadata_client, channel,
-        extract_zip_safely, filename_from_content_disposition, is_zip_filename,
-        parse_product_metadata, process, publish_extracted_directory, redundant_single_root,
+        DownloadQueue, EnqueueError, extract_zip_safely, hash_native_staging_file, is_zip_filename,
+        parse_product_metadata, publish_extracted_directory, redundant_single_root,
         sanitize_archive_path,
     };
-    use crate::{db::Database, error::AppError, model::DownloadRequest};
+    use crate::error::AppError;
 
     #[test]
     fn reads_public_product_open_graph_metadata() {
@@ -768,18 +582,6 @@ mod tests {
             product.thumbnail_url.as_deref(),
             Some("https://booth.pximg.net/example.png")
         );
-    }
-
-    #[test]
-    fn accepts_only_safe_content_disposition_filenames() {
-        assert_eq!(
-            filename_from_content_disposition(
-                "attachment; filename*=UTF-8''sample%20package.unitypackage"
-            )
-            .as_deref(),
-            Some("sample package.unitypackage")
-        );
-        assert!(filename_from_content_disposition("attachment; filename=../secret.txt").is_none());
     }
 
     #[test]
@@ -820,71 +622,40 @@ mod tests {
 
     #[test]
     fn cleanup_and_download_admission_are_mutually_exclusive() {
-        let (queue, mut receiver) = channel();
-        let request = DownloadRequest {
-            request_id: "request-1".into(),
-            item_id: 123,
-            variation_id: 456,
-            downloadable_id: None,
-            product_name: None,
-            shop_name: None,
-            filename: "package.zip".into(),
-            signed_url: Url::parse("https://s6.booth.pm/example").unwrap(),
-        };
+        let queue = DownloadQueue::default();
 
         let cleanup = queue.begin_cleanup().unwrap();
-        assert_eq!(
-            queue.try_send(request.clone()),
+        assert!(matches!(
+            queue.try_reserve(),
             Err(EnqueueError::CleanupActive)
-        );
+        ));
         drop(cleanup);
 
-        queue.try_send(request).unwrap();
+        let permit = queue.try_reserve().unwrap();
         assert!(matches!(
             queue.begin_cleanup(),
             Err(AppError::DownloadsInProgress)
         ));
-        receiver.try_recv().unwrap();
-        drop(queue.pending_guard());
+        drop(permit);
         assert!(queue.begin_cleanup().is_ok());
     }
 
     #[test]
-    fn skips_network_download_when_the_artifact_already_exists() {
+    fn hashes_a_completed_native_download() {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("library");
         std::fs::create_dir(&root).unwrap();
-        let database = Database::initialize(temporary.path().join("test.db")).unwrap();
-        database.set_library_root(&root).unwrap();
-        let request = DownloadRequest {
-            request_id: "request-1".into(),
-            item_id: 123,
-            variation_id: 456,
-            downloadable_id: None,
-            product_name: Some("Example".into()),
-            shop_name: Some("Shop".into()),
-            filename: "package.zip".into(),
-            signed_url: Url::parse("https://s6.booth.pm/this-must-not-be-requested.zip").unwrap(),
-        };
-        database.ensure_download_metadata(&request).unwrap();
-        let existing = root.join("package");
-        std::fs::create_dir(&existing).unwrap();
-        std::fs::write(existing.join("asset.txt"), b"existing").unwrap();
-        database
-            .record_artifact("artifact-1", &request, &existing, "hash", 1)
-            .unwrap();
+        let root = std::fs::canonicalize(root).unwrap();
+        let staged = root.join("download.part");
+        std::fs::write(&staged, b"hello").unwrap();
 
-        let outcome = tauri::async_runtime::block_on(process(
-            &build_client().unwrap(),
-            &build_metadata_client().unwrap(),
-            &database,
-            &request,
-        ))
-        .unwrap();
+        let (hash, size) =
+            tauri::async_runtime::block_on(hash_native_staging_file(&root, &staged)).unwrap();
 
+        assert_eq!(size, 5);
         assert_eq!(
-            outcome,
-            ProcessOutcome::AlreadyDownloaded(std::fs::canonicalize(existing).unwrap())
+            hash,
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
         );
     }
 

@@ -7,12 +7,11 @@
   const NOTIFICATION_DURATION_MS = 6000;
   const DOWNLOAD_LABEL = "ダウンロード";
   const ALTERNATIVE_LABEL = "その他のDL方法";
-  const BLM_LABEL = "BOOTH Library ManagerでDL";
   const HIDDEN_CLASS = "booth-shelf-hidden-download-option";
   const HIDDEN_CHROME_CLASS = "booth-shelf-hidden-library-chrome";
   const LIBRARY_MAIN_ATTRIBUTE = "data-booth-shelf-library-main";
-  const ENHANCED_ATTRIBUTE = "data-booth-shelf-download";
   const LIBRARY_TAB_LABELS = ["購入した商品", "ギフト", "無料ダウンロード"];
+  const INTENT_TIMEOUT_MS = 3000;
 
   if (window.__boothShelfDownloadBridgeInstalled) return;
   window.__boothShelfDownloadBridgeInstalled = true;
@@ -32,17 +31,14 @@
         #${NOTIFICATION_HOST_ID} .booth-shelf-notification {
           position: relative; min-height: 78px; padding: 16px 14px 17px 16px;
           display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 13px;
-          align-items: center; overflow: hidden;
-          border: 1px solid #dbe1eb; border-radius: 14px;
-          background: #fffffff2; box-shadow: 0 8px 28px #25304722;
+          align-items: center; overflow: hidden; border: 1px solid #dbe1eb;
+          border-radius: 14px; background: #fffffff2; box-shadow: 0 8px 28px #25304722;
           backdrop-filter: blur(12px); color: #687287;
           transition: transform 160ms ease, box-shadow 160ms ease;
         }
         #${NOTIFICATION_HOST_ID} .booth-shelf-notification.completed { color: #2d8a6a; }
         #${NOTIFICATION_HOST_ID} .booth-shelf-notification.failed { color: #b43d57; }
-        #${NOTIFICATION_HOST_ID} .booth-shelf-notification.completed[data-request-id] {
-          cursor: pointer;
-        }
+        #${NOTIFICATION_HOST_ID} .booth-shelf-notification.completed[data-request-id] { cursor: pointer; }
         #${NOTIFICATION_HOST_ID} .booth-shelf-notification.completed[data-request-id]:hover {
           transform: translateY(-2px); box-shadow: 0 12px 34px #25304730;
         }
@@ -52,21 +48,18 @@
         }
         #${NOTIFICATION_HOST_ID} .booth-shelf-notification:not(.completed):not(.failed)
           .booth-shelf-notification-icon { animation: booth-shelf-spin 1s linear infinite; }
-        #${NOTIFICATION_HOST_ID} strong,
-        #${NOTIFICATION_HOST_ID} span {
+        #${NOTIFICATION_HOST_ID} strong, #${NOTIFICATION_HOST_ID} span {
           display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         }
         #${NOTIFICATION_HOST_ID} strong { color: #2a3347; font-size: 13px; }
         #${NOTIFICATION_HOST_ID} span { margin-top: 5px; font-size: 11px; }
         #${NOTIFICATION_HOST_ID} button {
-          width: 30px; height: 30px; display: grid;
-          place-items: center; border: 0; border-radius: 7px;
-          background: transparent; color: #8b95a8; cursor: pointer;
+          width: 30px; height: 30px; display: grid; place-items: center; border: 0;
+          border-radius: 7px; background: transparent; color: #8b95a8; cursor: pointer;
         }
         #${NOTIFICATION_HOST_ID} button:hover { background: #edf0f5; color: #394357; }
         #${NOTIFICATION_HOST_ID} .booth-shelf-notification-expiry {
-          position: absolute; right: 0; bottom: 0; left: 0; height: 4px;
-          background: #e6ebf2;
+          position: absolute; right: 0; bottom: 0; left: 0; height: 4px; background: #e6ebf2;
         }
         #${NOTIFICATION_HOST_ID} .booth-shelf-notification.completed
           .booth-shelf-notification-expiry::after {
@@ -96,9 +89,7 @@
     const host = ensureNotificationHost();
     if (!host) return;
     const key = String(status.requestId || "general-download-error");
-    let row = Array.from(host.children).find(
-      (element) => element.dataset.notificationKey === key,
-    );
+    let row = Array.from(host.children).find((element) => element.dataset.notificationKey === key);
     if (!row) {
       row = document.createElement("div");
       row.dataset.notificationKey = key;
@@ -146,7 +137,6 @@
       row.setAttribute("tabindex", "0");
       row.setAttribute("aria-label", "ダウンロード済み商品のフォルダを開く");
     }
-
     const existingTimer = notificationTimers.get(key);
     if (existingTimer !== undefined) window.clearTimeout(existingTimer);
     if (status.state === "completed") {
@@ -160,28 +150,18 @@
 
   if (
     window.location.origin !== BOOTH_LIBRARY_ORIGIN ||
-    !(
-      window.location.pathname === "/library" ||
-      window.location.pathname.startsWith("/library/")
-    )
-  ) {
-    return;
-  }
+    !(window.location.pathname === "/library" || window.location.pathname.startsWith("/library/"))
+  ) return;
 
   const normalize = (value) => (value || "").replace(/\s+/g, "").trim();
-  const labelIs = (element, label) =>
-    normalize(element.textContent) === normalize(label);
-  const actionElements = (root) =>
-    Array.from(
-      root.querySelectorAll('button, a, [role="button"], [role="menuitem"]'),
-    );
-
-  const findLibraryTabs = () =>
-    Array.from(document.querySelectorAll("nav")).find((navigation) => {
-      const text = normalize(navigation.textContent);
-      return LIBRARY_TAB_LABELS.every((label) => text.includes(normalize(label)));
-    });
-
+  const labelIs = (element, label) => normalize(element.textContent) === normalize(label);
+  const actionElements = (root) => Array.from(
+    root.querySelectorAll('button, a, [role="button"], [role="menuitem"]'),
+  );
+  const findLibraryTabs = () => Array.from(document.querySelectorAll("nav")).find((navigation) => {
+    const text = normalize(navigation.textContent);
+    return LIBRARY_TAB_LABELS.every((label) => text.includes(normalize(label)));
+  });
   const hidePrecedingSiblings = (element) => {
     let sibling = element.previousElementSibling;
     while (sibling) {
@@ -189,197 +169,134 @@
       sibling = sibling.previousElementSibling;
     }
   };
-
-  const hideLibraryFooter = () => {
-    for (const footer of document.querySelectorAll(
-      'footer, [role="contentinfo"]',
-    )) {
-      footer.classList.add(HIDDEN_CHROME_CLASS);
-    }
-  };
-
   const simplifyLibraryChrome = () => {
     const tabs = findLibraryTabs();
     if (!tabs) return;
-
-    hideLibraryFooter();
-
+    for (const footer of document.querySelectorAll('footer, [role="contentinfo"]')) {
+      footer.classList.add(HIDDEN_CHROME_CLASS);
+    }
     let current = tabs;
     while (current && current !== document.body) {
       hidePrecedingSiblings(current);
       current = current.parentElement;
     }
-
     const main = tabs.closest("main");
     if (main) main.setAttribute(LIBRARY_MAIN_ATTRIBUTE, "true");
     tabs.style.setProperty("margin-top", "0", "important");
   };
-
   const findPair = (downloadButton) => {
     let container = downloadButton.parentElement;
     for (let depth = 0; container && depth < 6; depth += 1) {
       const actions = actionElements(container);
-      const downloads = actions.filter((element) =>
-        labelIs(element, DOWNLOAD_LABEL),
-      );
-      const alternatives = actions.filter((element) =>
-        labelIs(element, ALTERNATIVE_LABEL),
-      );
+      const downloads = actions.filter((element) => labelIs(element, DOWNLOAD_LABEL));
+      const alternatives = actions.filter((element) => labelIs(element, ALTERNATIVE_LABEL));
       if (downloads.length === 1 && alternatives.length === 1) {
-        return { container, alternative: alternatives[0] };
+        return { container, download: downloads[0], alternative: alternatives[0] };
       }
       container = container.parentElement;
     }
     return null;
   };
-
-  const isVisible = (element) =>
-    element.getClientRects().length > 0 &&
-    window.getComputedStyle(element).visibility !== "hidden";
-
-  const findVisibleTextElement = (root, label) => {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    let textNode = walker.nextNode();
-    while (textNode) {
-      if (normalize(textNode.nodeValue) === normalize(label)) {
-        const element = textNode.parentElement;
-        if (element && isVisible(element)) return element;
-      }
-      textNode = walker.nextNode();
+  const positiveInteger = (value) => {
+    if (!/^[1-9]\d*$/.test(value || "")) return null;
+    const number = Number(value);
+    return Number.isSafeInteger(number) ? number : null;
+  };
+  const parseDownloadUrl = (value) => {
+    let url;
+    try { url = new URL(value, window.location.href); } catch { return null; }
+    if (url.protocol !== "https:" || url.hostname !== "booth.pm") return null;
+    const match = url.pathname.match(/^\/downloadables\/([1-9]\d*)\/?$/);
+    const variationValues = url.searchParams.getAll("variation_id");
+    if (!match || variationValues.length !== 1) return null;
+    const downloadableId = positiveInteger(match[1]);
+    const variationId = positiveInteger(variationValues[0]);
+    if (!downloadableId || !variationId) return null;
+    return { href: url.href, downloadableId, variationId };
+  };
+  const itemIdFromHref = (value) => {
+    let url;
+    try { url = new URL(value, window.location.href); } catch { return null; }
+    if (url.protocol !== "https:" || url.hostname !== "booth.pm") return null;
+    const match = url.pathname.match(/^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?items\/([1-9]\d*)\/?$/i);
+    return match ? positiveInteger(match[1]) : null;
+  };
+  const findItemId = (element) => {
+    let container = element;
+    for (let depth = 0; container && depth < 12; depth += 1) {
+      const ids = new Set(
+        Array.from(container.querySelectorAll("a[href]"))
+          .map((link) => itemIdFromHref(link.href))
+          .filter(Boolean),
+      );
+      if (ids.size === 1) return ids.values().next().value;
+      if (ids.size > 1) return null;
+      container = container.parentElement;
     }
     return null;
   };
-
-  const findBlmAction = (container) => {
-    const localLink = Array.from(container.querySelectorAll("a[href]")).find(
-      (element) =>
-        (element.getAttribute("href") || "").startsWith(
-          "booth-library-manager://",
-        ),
-    );
-    if (localLink) return localLink;
-
-    const visibleLink = Array.from(document.querySelectorAll("a[href]")).find(
-      (element) =>
-        isVisible(element) &&
-        (element.getAttribute("href") || "").startsWith(
-          "booth-library-manager://",
-        ),
-    );
-    if (visibleLink) return visibleLink;
-
-    return (
-      actionElements(container).find(
-        (element) => isVisible(element) && labelIs(element, BLM_LABEL),
-      ) ||
-      findVisibleTextElement(container, BLM_LABEL) ||
-      findVisibleTextElement(document, BLM_LABEL)
-    );
+  const dropdownUrls = (element) => {
+    const raw = element.getAttribute("data-dropdown-items");
+    if (!raw || raw.length > 100000) return [];
+    let items;
+    try { items = JSON.parse(raw); } catch { return []; }
+    if (!Array.isArray(items)) return [];
+    return items.map((item) => item && typeof item.path === "string" ? item.path : null).filter(Boolean);
   };
-
-  const waitForBlmAction = async (container) => {
-    const deadline = performance.now() + 1200;
-    do {
-      const action = findBlmAction(container);
-      if (action) return action;
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    } while (performance.now() < deadline);
-    return null;
-  };
-
-  const activateBlmAction = (action) => {
-    const link = action.matches("a[href]")
-      ? action
-      : action.closest("a[href]") || action.querySelector("a[href]");
-    const href = link?.getAttribute("href") || "";
-    if (href.startsWith("booth-library-manager://")) {
-      window.location.assign(href);
-      return;
-    }
-    action.click();
-  };
-
-  const restoreAlternative = (alternative, shouldHide) => {
-    alternative.style.removeProperty("position");
-    alternative.style.removeProperty("left");
-    alternative.style.removeProperty("top");
-    alternative.style.removeProperty("visibility");
-    if (shouldHide) alternative.classList.add(HIDDEN_CLASS);
-  };
-
-  const dismissAlternativeMenu = (action) => {
-    setTimeout(() => {
-      let overlay = action.parentElement;
-      for (let depth = 0; overlay && depth < 8; depth += 1) {
-        const position = window.getComputedStyle(overlay).position;
-        if (
-          (position === "absolute" || position === "fixed") &&
-          normalize(overlay.textContent).includes(normalize(BLM_LABEL))
-        ) {
-          overlay.classList.add(HIDDEN_CLASS);
-          break;
-        }
-        overlay = overlay.parentElement;
-      }
-
-      const outside = document.body || document.documentElement;
-      const mouseOptions = { bubbles: true, cancelable: true, view: window };
-      outside.dispatchEvent(new PointerEvent("pointerdown", mouseOptions));
-      outside.dispatchEvent(new MouseEvent("mousedown", mouseOptions));
-      outside.dispatchEvent(new PointerEvent("pointerup", mouseOptions));
-      outside.dispatchEvent(new MouseEvent("mouseup", mouseOptions));
-      outside.dispatchEvent(new MouseEvent("click", mouseOptions));
-    }, 0);
-  };
-
-  const bridgeDownload = async (downloadButton) => {
-    if (downloadButton.dataset.boothShelfBusy === "true") return;
-    const pair = findPair(downloadButton);
-    if (!pair) return;
-
-    downloadButton.dataset.boothShelfBusy = "true";
-    const existingAction = findBlmAction(pair.container);
-    if (existingAction) {
-      const menuWasVisible = isVisible(existingAction);
-      activateBlmAction(existingAction);
-      if (menuWasVisible) dismissAlternativeMenu(existingAction);
-      return;
-    }
-
-    pair.alternative.classList.remove(HIDDEN_CLASS);
-    pair.alternative.style.setProperty("position", "fixed", "important");
-    pair.alternative.style.setProperty("left", "-10000px", "important");
-    pair.alternative.style.setProperty("top", "0", "important");
-    pair.alternative.style.setProperty("visibility", "hidden", "important");
-    pair.alternative.click();
-
-    const action = await waitForBlmAction(pair.container);
-    if (action) {
-      restoreAlternative(pair.alternative, true);
-      activateBlmAction(action);
-      dismissAlternativeMenu(action);
-      return;
-    }
-
-    restoreAlternative(pair.alternative, false);
-    downloadButton.dataset.boothShelfBusy = "false";
-    window.alert(
-      "Booth Shelf用のダウンロードリンクを取得できませんでした。表示された「その他のDL方法」から再試行してください。",
-    );
-  };
-
+  const contextByDownload = new Map();
+  const downloadKey = ({ downloadableId, variationId }) => `${downloadableId}:${variationId}`;
   const enhance = () => {
     simplifyLibraryChrome();
+    contextByDownload.clear();
+    const validAlternatives = new Set();
     for (const button of actionElements(document)) {
-      if (!labelIs(button, DOWNLOAD_LABEL) || button.hasAttribute(ENHANCED_ATTRIBUTE)) {
-        continue;
-      }
+      if (!labelIs(button, DOWNLOAD_LABEL)) continue;
       const pair = findPair(button);
-      if (!pair) continue;
-      button.setAttribute(ENHANCED_ATTRIBUTE, "true");
-      button.setAttribute("title", "Booth Shelfでダウンロード");
+      if (!pair || pair.download !== button) continue;
+      const itemId = findItemId(pair.container);
+      if (!itemId) continue;
+      const candidates = [];
+      if (button.matches("a[href]")) candidates.push(button.href);
+      candidates.push(...dropdownUrls(button));
+      const downloads = candidates.map(parseDownloadUrl).filter(Boolean);
+      if (downloads.length === 0) continue;
+      for (const download of downloads) contextByDownload.set(downloadKey(download), itemId);
       pair.alternative.classList.add(HIDDEN_CLASS);
+      validAlternatives.add(pair.alternative);
     }
+    for (const hidden of document.querySelectorAll(`.${HIDDEN_CLASS}`)) {
+      if (!validAlternatives.has(hidden)) hidden.classList.remove(HIDDEN_CLASS);
+    }
+  };
+
+  const pendingIntents = new Map();
+  const rejectIntent = (requestId) => {
+    const pending = pendingIntents.get(requestId);
+    if (!pending) return;
+    window.clearTimeout(pending.timer);
+    pendingIntents.delete(requestId);
+    window.__boothShelfNotify({ requestId, state: "failed" });
+  };
+  window.__boothShelfAcceptDownloadIntent = (requestId) => {
+    const key = String(requestId);
+    const pending = pendingIntents.get(key);
+    if (!pending) return;
+    window.clearTimeout(pending.timer);
+    pendingIntents.delete(key);
+    window.location.assign(pending.href);
+  };
+  window.__boothShelfRejectDownloadIntent = (requestId) => rejectIntent(String(requestId));
+  const registerDownloadIntent = (download, itemId) => {
+    const requestId = crypto.randomUUID();
+    const timer = window.setTimeout(() => rejectIntent(requestId), INTENT_TIMEOUT_MS);
+    pendingIntents.set(requestId, { href: download.href, timer });
+    const query = new URLSearchParams({
+      request_id: requestId,
+      item_id: String(itemId),
+      variation_id: String(download.variationId),
+      downloadable_id: String(download.downloadableId),
+    });
+    window.location.assign(`booth-shelf://download-intent?${query}`);
   };
 
   const start = () => {
@@ -387,31 +304,28 @@
       setTimeout(start, 0);
       return;
     }
-
     const style = document.createElement("style");
     style.textContent = `
       .${HIDDEN_CLASS}, .${HIDDEN_CHROME_CLASS} { display: none !important; }
-      [${LIBRARY_MAIN_ATTRIBUTE}="true"] {
-        margin-top: 0 !important;
-        padding-top: 16px !important;
-      }
+      [${LIBRARY_MAIN_ATTRIBUTE}="true"] { margin-top: 0 !important; padding-top: 16px !important; }
     `;
     document.documentElement.appendChild(style);
-
-    document.addEventListener(
-      "click",
-      (event) => {
-        const target = event.target;
-        if (!(target instanceof Element)) return;
-        const button = target.closest(`[${ENHANCED_ATTRIBUTE}="true"]`);
-        if (!button) return;
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        bridgeDownload(button);
-      },
-      true,
-    );
-
+    document.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const link = target.closest("a[href]");
+      if (!link) return;
+      const download = parseDownloadUrl(link.href);
+      if (!download) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const itemId = contextByDownload.get(downloadKey(download)) || findItemId(link);
+      if (!itemId) {
+        window.__boothShelfNotify({ requestId: crypto.randomUUID(), state: "failed" });
+        return;
+      }
+      registerDownloadIntent(download, itemId);
+    }, true);
     let scheduled = false;
     const scheduleEnhance = () => {
       if (scheduled) return;

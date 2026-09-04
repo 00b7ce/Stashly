@@ -27,9 +27,9 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-For a manual deeplink test, use a free item already present in the user's account. Stop before any purchase or account change. Confirm that:
+For a manual download test, use a free item already present in the user's account. Stop before any purchase or account change. Confirm that:
 
-- the navigation is intercepted inside the dedicated WebView;
+- the ordinary BOOTH download stays inside the dedicated WebView download flow and no copy appears in the system Downloads folder;
 - BOOTH opens inside the main native window beside the persistent sidebar, without creating another top-level window;
 - the BOOTH toolbar stays above the embedded page, its back, forward, and reload buttons affect only the embedded browser, and its non-editable URL follows navigation;
 - primary-clicking the displayed URL copies the visible sanitized value and shows the confirmation popup; right-clicking opens no context menu, and the address cannot be edited, selected, or dragged;
@@ -43,11 +43,11 @@ For a manual deeplink test, use a free item already present in the user's accoun
 - the local library heading, search field, view selector, and refresh action share one row; all three grid sizes and the horizontal list layout remain usable at the minimum window width;
 - the `booth-browser` child WebView cannot invoke local commands, dialogs, opener APIs, or filesystem functionality;
 - the normal BOOTH library download button starts the Booth Shelf flow and its paired alternative-download control is hidden;
-- a DOM mismatch restores the original alternative-download control instead of starting an unmanaged browser download;
-- no raw deeplink or signed URL appears in logs or SQLite;
+- a DOM mismatch leaves the original alternative-download control visible instead of guessing product or variation IDs;
+- no download intent or signed URL appears in logs or SQLite;
 - the file lands under the selected test root;
 - the completed notification contains no filename, product ID, local path, or internal error text; its expiry bar decreases from right to left over six seconds, and clicking it still opens the downloaded product folder through an opaque one-time request ID;
-- navigating, going back or forward, and reloading while a download is queued or active restores one updating notification for each in-progress request;
+- navigating, going back or forward, and reloading while a download is active restores one updating notification for each in-progress request;
 - a ZIP lands as an extracted directory and the original ZIP is absent;
 - traversal entries, links, more than 20,000 entries, and more than 16 GiB of expanded data are rejected without a partial final directory;
 - the global `booth-library-manager://` handler still points to the official application;
@@ -58,7 +58,7 @@ For a manual deeplink test, use a free item already present in the user's accoun
 - Settings displays a normal drive or UNC path without the Windows verbatim `\\?\` prefix;
 - cancelling the cleanup confirmation removes nothing;
 - confirmed cleanup removes indexed artifacts and empties the library view, while an unrelated sentinel file directly under the test root remains;
-- cleanup is rejected while a download is queued or active.
+- cleanup is rejected while a download is active.
 - the BOOTH browser-data action opens a themed in-app confirmation, defaults focus to Cancel, and closes on Escape or a backdrop click;
 - cancelling browser-data cleanup preserves the BOOTH login, while confirming it removes the dedicated profile's cookies, cache, history, and local storage and requires BOOTH/pixiv login again;
 - browser-data cleanup leaves downloaded artifacts, the Booth Shelf SQLite library, and local UI preferences unchanged.

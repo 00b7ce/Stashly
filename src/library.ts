@@ -15,7 +15,7 @@ export type LibrarySnapshot = {
   libraryRoot: string | null;
 };
 
-export type DownloadState = "queued" | "downloading" | "completed" | "failed";
+export type DownloadState = "downloading" | "completed" | "failed";
 
 export type DownloadStatus = {
   requestId: string;
