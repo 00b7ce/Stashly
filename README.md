@@ -2,6 +2,8 @@
 
 BOOTHから正当にダウンロードできる商品ファイルを、分かりやすいフォルダ構成と独立したローカルデータベースで管理するWindows向けデスクトップアプリです。Rust、Tauri 2、Reactで実装しています。
 
+![Booth Shelfのローカルライブラリ画面](docs/images/booth-shelf-library.png)
+
 > [!IMPORTANT]
 > Booth Shelfは個人が開発する非公式・実験的なオープンソースソフトウェアです。ピクシブ株式会社、BOOTH、pixiv、BOOTH Library Manager、各ショップオーナーとは提携・承認・協賛関係にありません。本アプリに関する問い合わせを公式サポートやショップオーナーへ送らないでください。
 
