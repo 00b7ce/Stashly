@@ -1,5 +1,8 @@
+// @vitest-environment jsdom
+
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   AccentColorPicker,
   ActivityPanel,
@@ -8,7 +11,10 @@ import {
   BrowserDataConfirmationDialog,
   DeleteConfirmationDialog,
   LibraryViewPicker,
+  OFFICIAL_PRIVACY_URL,
+  OFFICIAL_TERMS_URL,
   ProductCard,
+  SettingsView,
   ThemePicker,
   normalizeAccentColor,
 } from "./App";
@@ -68,15 +74,88 @@ describe("App navigation", () => {
 });
 
 describe("BrowserToolbar", () => {
-  it("offers back, forward, and reload actions", () => {
+  it("offers navigation and a non-editable click-to-copy address", () => {
     const markup = renderToStaticMarkup(
-      <BrowserToolbar onNavigate={() => undefined} />,
+      <BrowserToolbar
+        currentUrl="https://accounts.booth.pm/library?page=2"
+        onNavigate={() => undefined}
+      />,
     );
 
-    expect(markup.match(/<button/g)).toHaveLength(3);
+    expect(markup.match(/<button/g)).toHaveLength(4);
     expect(markup).toContain('aria-label="戻る"');
     expect(markup).toContain('aria-label="進む"');
     expect(markup).toContain('aria-label="ページを更新"');
+    expect(markup).toContain("クリックしてコピー");
+    expect(markup).not.toContain("<input");
+    expect(markup).not.toContain("contenteditable");
+    expect(markup).toContain("https://accounts.booth.pm/library?page=2");
+  });
+
+  it("copies on activation, shows confirmation, and suppresses the context menu", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    render(
+      <BrowserToolbar
+        currentUrl="https://accounts.booth.pm/library?page=2"
+        onNavigate={() => undefined}
+      />,
+    );
+    const address = screen.getByRole("button", { name: /現在のBOOTH・pixiv公式ページURL/ });
+    const contextMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    const middleMouseDown = new MouseEvent("mousedown", {
+      bubbles: true,
+      button: 1,
+      cancelable: true,
+    });
+    const dragStart = new Event("dragstart", { bubbles: true, cancelable: true });
+
+    address.dispatchEvent(contextMenu);
+    expect(contextMenu.defaultPrevented).toBe(true);
+    address.dispatchEvent(middleMouseDown);
+    expect(middleMouseDown.defaultPrevented).toBe(true);
+    address.dispatchEvent(dragStart);
+    expect(dragStart.defaultPrevented).toBe(true);
+    fireEvent.click(address);
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(
+      "https://accounts.booth.pm/library?page=2",
+    ));
+    expect(screen.getByRole("status").textContent).toContain("✓URLをコピーしました");
+  });
+});
+
+describe("SettingsView", () => {
+  it("identifies the app as unofficial and separates official policy links", () => {
+    const markup = renderToStaticMarkup(
+      <SettingsView
+        appVersion="1.0.1"
+        libraryRoot={null}
+        themeMode="system"
+        accentColor="#e76b8c"
+        deleting={false}
+        cleanupMessage={null}
+        clearingBrowserData={false}
+        browserDataMessage={null}
+        onChooseRoot={() => undefined}
+        onThemeChange={() => undefined}
+        onAccentColorChange={() => undefined}
+        onDelete={() => undefined}
+        onClearBrowserData={() => undefined}
+        onOpenOfficialInformation={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain("バージョン");
+    expect(markup).toContain("1.0.1");
+    expect(markup).toContain("非公式アプリ");
+    expect(markup).toContain("Booth Shelfのサポート窓口ではありません");
+    expect(markup).toContain(`href="${OFFICIAL_TERMS_URL}"`);
+    expect(markup).toContain(`href="${OFFICIAL_PRIVACY_URL}"`);
+    expect(markup).not.toContain("BOOTH公式サポート");
   });
 });
 

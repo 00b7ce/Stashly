@@ -31,7 +31,9 @@ For a manual deeplink test, use a free item already present in the user's accoun
 
 - the navigation is intercepted inside the dedicated WebView;
 - BOOTH opens inside the main native window beside the persistent sidebar, without creating another top-level window;
-- the BOOTH toolbar stays above the embedded page and its back, forward, and reload buttons affect only the embedded browser;
+- the BOOTH toolbar stays above the embedded page, its back, forward, and reload buttons affect only the embedded browser, and its non-editable URL follows navigation;
+- primary-clicking the displayed URL copies the visible sanitized value and shows the confirmation popup; right-clicking opens no context menu, and the address cannot be edited, selected, or dragged;
+- authentication parameters, fragments, and non-page library query parameters are absent from the displayed and copied URL;
 - collapsing the sidebar leaves recognizable menu icons and expands the embedded page, while expanding it restores the labels;
 - Settings remains directly above the sidebar collapse control in both expanded and collapsed layouts;
 - system, light, and dark theme choices update the local UI immediately and persist after restart;
@@ -51,6 +53,7 @@ For a manual deeplink test, use a free item already present in the user's accoun
 - the global `booth-library-manager://` handler still points to the official application;
 - the existing BOOTH Library Manager database and download root are unchanged.
 - Settings shows the configured root once, and changing it updates subsequent downloads;
+- Settings shows the packaged application version and an explicit nonofficial notice; the terms and privacy links open the expected official pages in the system browser under a separate official-information heading, with no BOOTH support link presented as the app's support contact;
 - the delete action opens a themed in-app confirmation, initially focuses Cancel, closes on Escape, and does not delete until the destructive button is explicitly chosen;
 - Settings displays a normal drive or UNC path without the Windows verbatim `\\?\` prefix;
 - cancelling the cleanup confirmation removes nothing;

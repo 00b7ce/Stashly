@@ -6,7 +6,13 @@
   "permissions": [
     "core:default",
     "dialog:allow-open",
-    "opener:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://booth.pm/terms" },
+        { "url": "https://booth.pm/privacy" }
+      ]
+    },
     "allow-get-library",
     "allow-set-library-root",
     "allow-open-booth-browser",

@@ -160,7 +160,10 @@
 
   if (
     window.location.origin !== BOOTH_LIBRARY_ORIGIN ||
-    !window.location.pathname.startsWith("/library")
+    !(
+      window.location.pathname === "/library" ||
+      window.location.pathname.startsWith("/library/")
+    )
   ) {
     return;
   }

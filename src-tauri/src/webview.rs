@@ -7,7 +7,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tauri::webview::{NewWindowResponse, PageLoadEvent, WebviewBuilder};
-use tauri::{AppHandle, Manager, Runtime, Webview, WebviewUrl};
+use tauri::{AppHandle, Emitter, Manager, Runtime, Webview, WebviewUrl};
 use url::Url;
 
 use crate::{
@@ -20,6 +20,7 @@ use crate::{
 
 pub const BROWSER_LABEL: &str = "booth-browser";
 const MAIN_WINDOW_LABEL: &str = "main";
+const BROWSER_LOCATION_EVENT: &str = "booth-browser-location";
 const LOCAL_ACTION_SCHEME: &str = "booth-shelf";
 const OPEN_FOLDER_ACTION_HOST: &str = "open-product-folder";
 const BLM_FALLBACK_WINDOW: Duration = Duration::from_secs(10);
@@ -224,6 +225,7 @@ pub async fn show(
             .map_err(|error| AppError::InvalidPayload(error.to_string()))?;
         let current = webview.url().ok();
         let destination = browser_locations.destination(current.as_ref(), &target);
+        emit_browser_location(&app, &destination);
         if current.as_ref() != Some(&destination) {
             webview
                 .navigate(destination)
@@ -246,6 +248,8 @@ pub async fn show(
         .active_download_notifications
         .clone();
     let page_load_locations = browser_locations.clone();
+    let page_load_app = app.clone();
+    let initial_location = target.clone();
     let last_blm_deeplink = Arc::new(Mutex::new(None));
     let navigation_state = last_blm_deeplink.clone();
 
@@ -314,12 +318,17 @@ pub async fn show(
             } else if should_suppress_blm_fallback(url, &navigation_state, Instant::now()) {
                 false
             } else {
-                is_allowed_browser_url(url)
+                let allowed = is_allowed_browser_url(url);
+                if allowed {
+                    emit_browser_location(&callback_app, url);
+                }
+                allowed
             }
         })
         .on_page_load(move |webview, payload| {
             if payload.event() == PageLoadEvent::Finished {
                 page_load_locations.remember(payload.url());
+                emit_browser_location(&page_load_app, payload.url());
                 replay_download_notifications(&webview, &active_notifications);
             }
         })
@@ -333,6 +342,7 @@ pub async fn show(
     webview
         .set_focus()
         .map_err(|error| AppError::InvalidPayload(error.to_string()))?;
+    emit_browser_location(&app, &initial_location);
     Ok(())
 }
 
@@ -461,6 +471,41 @@ fn profile_directory(app: &AppHandle) -> AppResult<PathBuf> {
         .app_local_data_dir()
         .map_err(|_| AppError::MissingAppDataDirectory)?
         .join("booth-webview"))
+}
+
+fn browser_url_for_display(url: &Url) -> Option<String> {
+    if !is_allowed_browser_url(url) {
+        return None;
+    }
+
+    let library_page = is_booth_library_page(url)
+        .then(|| {
+            url.query_pairs().find_map(|(key, value)| {
+                (key == "page"
+                    && !value.is_empty()
+                    && value.len() <= 6
+                    && value.bytes().all(|byte| byte.is_ascii_digit()))
+                .then(|| value.into_owned())
+            })
+        })
+        .flatten();
+
+    let mut display = url.clone();
+    display.set_fragment(None);
+    display.set_query(None);
+    display.set_username("").ok()?;
+    display.set_password(None).ok()?;
+    if let Some(page) = library_page {
+        display.query_pairs_mut().append_pair("page", &page);
+    }
+    Some(display.into())
+}
+
+fn emit_browser_location(app: &AppHandle, url: &Url) {
+    let Some(display_url) = browser_url_for_display(url) else {
+        return;
+    };
+    let _ = app.emit_to(MAIN_WINDOW_LABEL, BROWSER_LOCATION_EVENT, display_url);
 }
 
 fn should_suppress_blm_fallback(
@@ -601,6 +646,29 @@ mod tests {
     }
 
     #[test]
+    fn browser_location_display_omits_sensitive_query_and_fragment() {
+        let login =
+            Url::parse("https://accounts.pixiv.net/login?code=secret&state=opaque#callback")
+                .unwrap();
+
+        assert_eq!(
+            browser_url_for_display(&login).as_deref(),
+            Some("https://accounts.pixiv.net/login")
+        );
+    }
+
+    #[test]
+    fn browser_location_display_keeps_only_a_numeric_library_page() {
+        let library =
+            Url::parse("https://accounts.booth.pm/library?page=12&token=secret#downloads").unwrap();
+
+        assert_eq!(
+            browser_url_for_display(&library).as_deref(),
+            Some("https://accounts.booth.pm/library?page=12")
+        );
+    }
+
+    #[test]
     fn active_download_notifications_are_replaced_and_removed_by_terminal_states() {
         let notifications = ActiveDownloadNotifications::default();
         let request_id = "7cf15df3-9714-4ff5-bf56-ab976127be9d";
@@ -672,6 +740,10 @@ mod tests {
     #[test]
     fn download_bridge_hides_only_library_chrome_before_the_tabs() {
         assert!(BOOTH_DOWNLOAD_BRIDGE.contains("LIBRARY_TAB_LABELS"));
+        assert!(BOOTH_DOWNLOAD_BRIDGE.contains("window.location.pathname === \"/library\""));
+        assert!(
+            BOOTH_DOWNLOAD_BRIDGE.contains("window.location.pathname.startsWith(\"/library/\")")
+        );
         assert!(BOOTH_DOWNLOAD_BRIDGE.contains("hidePrecedingSiblings"));
         assert!(BOOTH_DOWNLOAD_BRIDGE.contains("tabs.closest(\"main\")"));
     }
@@ -761,45 +833,32 @@ mod tests {
     #[test]
     fn main_capability_is_scoped_to_the_local_webview_only() {
         let capability: serde_json::Value = serde_json::from_str(MAIN_CAPABILITY).unwrap();
+        let permissions = capability["permissions"].as_array().unwrap();
         assert_eq!(capability["webviews"], serde_json::json!(["main"]));
         assert!(capability.get("windows").is_none());
         assert!(capability.get("remote").is_none());
-        assert!(
-            capability["permissions"]
-                .as_array()
-                .unwrap()
-                .contains(&serde_json::json!("allow-navigate-booth-browser"))
-        );
-        assert!(
-            capability["permissions"]
-                .as_array()
-                .unwrap()
-                .contains(&serde_json::json!("allow-clear-booth-browser-data"))
-        );
-        assert!(
-            !capability["permissions"]
-                .as_array()
-                .unwrap()
-                .contains(&serde_json::json!(
-                    "core:webview:allow-clear-all-browsing-data"
-                ))
-        );
-        assert!(
-            !capability["permissions"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|permission| {
-                    permission
-                        .as_str()
-                        .is_some_and(|permission| permission.contains("booth-browser-theme"))
-                })
-        );
-        assert!(
-            !capability["permissions"]
-                .as_array()
-                .unwrap()
-                .contains(&serde_json::json!("dialog:allow-ask"))
+        assert!(permissions.contains(&serde_json::json!("allow-navigate-booth-browser")));
+        assert!(permissions.contains(&serde_json::json!("allow-clear-booth-browser-data")));
+        assert!(!permissions.contains(&serde_json::json!(
+            "core:webview:allow-clear-all-browsing-data"
+        )));
+        assert!(!permissions.iter().any(|permission| {
+            permission
+                .as_str()
+                .is_some_and(|permission| permission.contains("booth-browser-theme"))
+        }));
+        assert!(!permissions.contains(&serde_json::json!("dialog:allow-ask")));
+        assert!(!permissions.contains(&serde_json::json!("opener:default")));
+        let opener = permissions
+            .iter()
+            .find(|permission| permission["identifier"] == "opener:allow-open-url")
+            .unwrap();
+        assert_eq!(
+            opener["allow"],
+            serde_json::json!([
+                { "url": "https://booth.pm/terms" },
+                { "url": "https://booth.pm/privacy" }
+            ])
         );
     }
 

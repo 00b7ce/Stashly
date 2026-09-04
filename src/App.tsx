@@ -1,19 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   ArrowLeft,
   ArrowRight,
   Box,
   CheckCircle2,
   Cookie,
+  Copy,
   Download,
   ExternalLink,
   Folder,
   FolderOpen,
   Grid2X2,
   Grid3X3,
+  Info,
   LayoutGrid,
   Library,
   List,
@@ -44,6 +48,12 @@ import {
 const EMPTY_LIBRARY: LibrarySnapshot = { products: [], libraryRoot: null };
 const BOOTH_TOP_URL = "https://booth.pm/ja";
 const BOOTH_LIBRARY_URL = "https://accounts.booth.pm/library";
+const BROWSER_LOCATION_EVENT = "booth-browser-location";
+export const OFFICIAL_TERMS_URL = "https://booth.pm/terms";
+export const OFFICIAL_PRIVACY_URL = "https://booth.pm/privacy";
+export type OfficialInformationUrl =
+  | typeof OFFICIAL_TERMS_URL
+  | typeof OFFICIAL_PRIVACY_URL;
 type ActiveView = "library" | "booth" | "booth-library" | "settings";
 export type LibraryViewMode = "large" | "medium" | "small" | "list";
 export type BrowserNavigationAction = "back" | "forward" | "reload";
@@ -152,6 +162,8 @@ export function App() {
   const [clearingBrowserData, setClearingBrowserData] = useState(false);
   const [browserDataConfirmationOpen, setBrowserDataConfirmationOpen] = useState(false);
   const [browserDataMessage, setBrowserDataMessage] = useState<string | null>(null);
+  const [browserUrl, setBrowserUrl] = useState(BOOTH_TOP_URL);
+  const [appVersion, setAppVersion] = useState("取得中…");
   const contentRef = useRef<HTMLElement>(null);
   const browserViewportRef = useRef<HTMLDivElement>(null);
   const notificationTimers = useRef(new Map<string, number>());
@@ -178,6 +190,16 @@ export function App() {
     document.documentElement.style.setProperty("--accent", accentColor);
     document.documentElement.style.setProperty("--accent-contrast", accentContrastColor(accentColor));
   }, [accentColor]);
+
+  useEffect(() => {
+    void getVersion().then(setAppVersion).catch(() => setAppVersion("取得できませんでした"));
+    const unlisten = listen<string>(BROWSER_LOCATION_EVENT, ({ payload }) => {
+      setBrowserUrl(payload);
+    });
+    return () => {
+      void unlisten.then((dispose) => dispose());
+    };
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -291,6 +313,10 @@ export function App() {
     );
   }, []);
 
+  const openOfficialInformation = useCallback((url: OfficialInformationUrl) => {
+    void openUrl(url).catch((reason) => setError(errorText(reason)));
+  }, []);
+
   const browserBounds = useCallback((): BrowserBounds | null => {
     const viewport = browserViewportRef.current;
     if (!viewport) return null;
@@ -346,6 +372,7 @@ export function App() {
   }
 
   async function openBooth(view: "booth" | "booth-library", initialUrl: string) {
+    setBrowserUrl(initialUrl);
     setActiveView(view);
     await new Promise<void>((resolve) =>
       window.requestAnimationFrame(() => resolve()),
@@ -472,7 +499,11 @@ export function App() {
       >
         {browserViewActive && (
           <>
-            <BrowserToolbar onNavigate={navigateBooth} />
+            <BrowserToolbar
+              currentUrl={browserUrl}
+              onNavigate={navigateBooth}
+              onCopyError={(message) => setError(message)}
+            />
             <div ref={browserViewportRef} className="browser-viewport" aria-hidden="true" />
           </>
         )}
@@ -490,6 +521,7 @@ export function App() {
 
         {activeView === "settings" ? (
           <SettingsView
+            appVersion={appVersion}
             libraryRoot={library.libraryRoot}
             themeMode={themeMode}
             accentColor={accentColor}
@@ -502,6 +534,7 @@ export function App() {
             onAccentColorChange={changeAccentColor}
             onDelete={requestDeleteAllDownloads}
             onClearBrowserData={requestClearBrowserData}
+            onOpenOfficialInformation={openOfficialInformation}
           />
         ) : activeView === "library" ? (
           <>
@@ -583,9 +616,30 @@ export function App() {
   );
 }
 
-export function BrowserToolbar({ onNavigate }: {
+export function BrowserToolbar({ currentUrl, onNavigate, onCopyError }: {
+  currentUrl: string;
   onNavigate: (action: BrowserNavigationAction) => void;
+  onCopyError?: (message: string) => void;
 }) {
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+  }, []);
+
+  async function copyCurrentUrl() {
+    try {
+      if (!navigator.clipboard) throw new Error("クリップボードを利用できません");
+      await navigator.clipboard.writeText(currentUrl);
+      setCopied(true);
+      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+      copiedTimer.current = window.setTimeout(() => setCopied(false), 2_000);
+    } catch (reason) {
+      onCopyError?.(`URLをコピーできませんでした: ${errorText(reason)}`);
+    }
+  }
+
   return <header className="browser-toolbar" aria-label="BOOTHブラウザ操作">
     <button type="button" onClick={() => onNavigate("back")} aria-label="戻る" title="戻る">
       <ArrowLeft size={19} />
@@ -596,6 +650,24 @@ export function BrowserToolbar({ onNavigate }: {
     <button type="button" onClick={() => onNavigate("reload")} aria-label="ページを更新" title="ページを更新">
       <RefreshCw size={18} />
     </button>
+    <button
+      className="browser-location"
+      type="button"
+      onClick={() => void copyCurrentUrl()}
+      onMouseDown={(event) => {
+        if (event.button !== 0) event.preventDefault();
+      }}
+      onContextMenu={(event) => event.preventDefault()}
+      onDragStart={(event) => event.preventDefault()}
+      aria-label={`現在のBOOTH・pixiv公式ページURL: ${currentUrl}。クリックしてコピー`}
+      title="クリックしてURLをコピー"
+    >
+      <span>{currentUrl}</span>
+      <Copy size={16} aria-hidden="true" />
+    </button>
+    {copied && <div className="browser-copy-toast" role="status">
+      <span aria-hidden="true">✓</span>URLをコピーしました
+    </div>}
   </header>;
 }
 
@@ -780,7 +852,8 @@ export function BrowserDataConfirmationDialog({ onCancel, onConfirm }: {
   </div>;
 }
 
-function SettingsView({ libraryRoot, themeMode, accentColor, deleting, cleanupMessage, clearingBrowserData, browserDataMessage, onChooseRoot, onThemeChange, onAccentColorChange, onDelete, onClearBrowserData }: {
+export function SettingsView({ appVersion, libraryRoot, themeMode, accentColor, deleting, cleanupMessage, clearingBrowserData, browserDataMessage, onChooseRoot, onThemeChange, onAccentColorChange, onDelete, onClearBrowserData, onOpenOfficialInformation }: {
+  appVersion: string;
   libraryRoot: string | null;
   themeMode: ThemeMode;
   accentColor: string;
@@ -793,6 +866,7 @@ function SettingsView({ libraryRoot, themeMode, accentColor, deleting, cleanupMe
   onAccentColorChange: (color: string) => void;
   onDelete: () => void;
   onClearBrowserData: () => void;
+  onOpenOfficialInformation: (url: OfficialInformationUrl) => void;
 }) {
   return <section className="settings-layout" aria-label="設定">
     <article className="settings-card">
@@ -819,6 +893,30 @@ function SettingsView({ libraryRoot, themeMode, accentColor, deleting, cleanupMe
         <button className="secondary-button" onClick={onChooseRoot}>
           <FolderOpen size={17} />{libraryRoot ? "保存先を変更" : "保存先を選択"}
         </button>
+      </div>
+    </article>
+
+    <article className="settings-card about-card">
+      <div className="settings-icon"><Info size={22} /></div>
+      <div className="settings-body">
+        <h2>このアプリについて</h2>
+        <p>Booth Shelfはピクシブ株式会社、BOOTH、pixivとは提携・承認・協賛関係のない非公式アプリです。</p>
+        <dl className="version-information">
+          <dt>バージョン</dt>
+          <dd>{appVersion}</dd>
+        </dl>
+        <div className="official-information">
+          <h3>BOOTH・pixiv公式情報（外部サイト）</h3>
+          <p>以下はBOOTH・pixivの公式文書です。Booth Shelfのサポート窓口ではありません。</p>
+          <nav aria-label="BOOTH・pixiv公式情報">
+            <a href={OFFICIAL_TERMS_URL} onClick={(event) => { event.preventDefault(); onOpenOfficialInformation(OFFICIAL_TERMS_URL); }}>
+              <span><strong>サービス利用規約</strong><small>booth.pm</small></span><ExternalLink size={16} />
+            </a>
+            <a href={OFFICIAL_PRIVACY_URL} onClick={(event) => { event.preventDefault(); onOpenOfficialInformation(OFFICIAL_PRIVACY_URL); }}>
+              <span><strong>プライバシーポリシー</strong><small>booth.pm</small></span><ExternalLink size={16} />
+            </a>
+          </nav>
+        </div>
       </div>
     </article>
 
