@@ -24,6 +24,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Node.js
@@ -83,6 +84,62 @@ jobs:
       - name: Run Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
 
+      - name: Generate release body
+        id: release_body
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $currentTag = $env:GITHUB_REF_NAME
+          $releaseTags = @(git tag --merged HEAD --sort=-version:refname --list "v*")
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not read release tags"
+          }
+          if ($currentTag -notin $releaseTags) {
+            throw "Current release tag $currentTag was not found"
+          }
+
+          $previousTag = $releaseTags |
+            Where-Object { $_ -ne $currentTag } |
+            Select-Object -First 1
+          $range = if ($previousTag) { "$previousTag..$currentTag" } else { $currentTag }
+
+          $commitLines = @(git log $range --pretty=format:"%H`t%h`t%s" | ForEach-Object {
+            $parts = $_ -split "`t", 3
+            if ($parts.Count -ne 3) {
+              throw "Could not parse commit metadata"
+            }
+            $subject = $parts[2].Replace("\\", "\\\\").Replace("[", "\[").Replace("]", "\]")
+            "- [$($parts[1])]($env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/commit/$($parts[0])) $subject"
+          })
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not generate the commit list"
+          }
+          if ($commitLines.Count -eq 0) {
+            $commitLines = @("- コミットはありません。")
+          }
+
+          $body = @(
+            "Windows x64向けの未署名NSISインストーラです。"
+            ""
+            "このReleaseはドラフトです。動作確認後に手動で公開してください。"
+            ""
+            "## 変更履歴"
+            ""
+          )
+          if ($previousTag) {
+            $body += "[$previousTag から $currentTag までの差分]($env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/compare/$previousTag...$currentTag)"
+            $body += ""
+          } else {
+            $body += "初回リリースのため、リポジトリ開始時点からのコミットを掲載します。"
+            $body += ""
+          }
+          $body += $commitLines
+
+          $delimiter = "release-body-$([guid]::NewGuid())"
+          "body<<$delimiter" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          $body | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          $delimiter | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Build NSIS installer and create draft release
         uses: tauri-apps/tauri-action@v1
         env:
@@ -90,10 +147,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Booth Shelf v__VERSION__"
-          releaseBody: |
-            Windows x64向けの未署名NSISインストーラです。
-
-            このReleaseはドラフトです。動作確認後に手動で公開してください。
+          releaseBody: ${{ steps.release_body.outputs.body }}
           releaseDraft: true
           prerelease: false
           args: --bundles nsis

@@ -65,4 +65,6 @@ For a manual deeplink test, use a free item already present in the user's accoun
 npm.cmd run tauri -- build --bundles nsis
 ```
 
+The tag-triggered release workflow adds a GitHub-linked list of commits since the previous reachable `v*` tag to the draft Release body, together with a compare link. If no previous release tag exists, it lists commits from the beginning of the repository instead.
+
 Do not claim the installer is signed unless its Authenticode signature has been verified.
