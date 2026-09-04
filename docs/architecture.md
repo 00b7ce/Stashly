@@ -27,8 +27,8 @@ The remote child WebView is positioned below the local browser toolbar and besid
 
 ## Download flow
 
-1. On `accounts.booth.pm/library`, an origin-scoped initialization script hides the site chrome preceding the purchased/gift/free-download tabs and the footer following the library content. It hides a paired `その他のDL方法` control only when the neighboring standard download action exposes valid BOOTH downloadable and variation IDs and the surrounding product card exposes one item ID. It exposes no Tauri IPC or local capability.
-2. When the user activates an ordinary `https://booth.pm/downloadables/...` link, the script sends only those positive IDs and an opaque UUID through a short-lived `booth-shelf://download-intent` navigation. Rust validates and arms the one-shot intent, then acknowledges it; only after that acknowledgement does the script navigate to the unchanged official download URL.
+1. On `accounts.booth.pm/library`, an origin-scoped initialization script hides the site chrome preceding the purchased/gift/free-download tabs, the footer following the library content, and every `その他のDL方法` control. The alternative-control hiding is independent of download admission. The script exposes no Tauri IPC or local capability.
+2. When the user activates an ordinary `https://booth.pm/downloadables/...` target from the standard button's `data-href`, the script validates the official host and exact path shape, resolves one surrounding item ID, and sends only positive IDs plus an opaque UUID through a short-lived `booth-shelf://download-intent` navigation. A queryless standard URL uses its downloadable ID as the internal variation key; an explicit `variation_id` remains validated when present. Rust validates and arms the one-shot intent, then acknowledges it; only after that acknowledgement does the script navigate to the unchanged official download URL.
 3. BOOTH performs the authenticated request in its own WebView. Rust's WebView2 download callback accepts only the matching one-shot intent and an exact BOOTH download endpoint or `s6.booth.pm` response, validates the suggested filename, and replaces the browser destination with an absolute UUID-named path inside the selected root's staging directory.
 4. The local index is checked before the transfer. If the same item, variation, and filename still exists inside the active library root, the existing artifact is returned without another download.
 5. Otherwise, up to two WebView downloads may be active. Additional requests and cleanup races are rejected before a destination is assigned.
@@ -68,4 +68,4 @@ Remote names are sanitized for Windows and the immutable BOOTH item ID disambigu
 
 ## Compatibility strategy
 
-The BOOTH library DOM and download-link shape are not public APIs. Parsing is origin-scoped and strict, and a mismatch fails closed instead of guessing identifiers. The official `booth-library-manager://` handler and BOOTH Library Manager data remain outside the application boundary.
+The BOOTH library DOM and download-link shape are not public APIs. Parsing is origin-scoped and strict, and a mismatch fails closed instead of guessing identifiers; only the independent hiding of `その他のDL方法` remains active. The official `booth-library-manager://` handler and BOOTH Library Manager data remain outside the application boundary.

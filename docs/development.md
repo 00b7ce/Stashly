@@ -43,7 +43,7 @@ For a manual download test, use a free item already present in the user's accoun
 - the local library heading, search field, view selector, and refresh action share one row; all three grid sizes and the horizontal list layout remain usable at the minimum window width;
 - the `booth-browser` child WebView cannot invoke local commands, dialogs, opener APIs, or filesystem functionality;
 - the normal BOOTH library download button starts the Booth Shelf flow and its paired alternative-download control is hidden;
-- a DOM mismatch leaves the original alternative-download control visible instead of guessing product or variation IDs;
+- a DOM mismatch keeps the alternative-download control hidden but refuses to arm the normal download instead of guessing product or download IDs;
 - no download intent or signed URL appears in logs or SQLite;
 - the file lands under the selected test root;
 - the completed notification contains no filename, product ID, local path, or internal error text; its expiry bar decreases from right to left over six seconds, and clicking it still opens the downloaded product folder through an opaque one-time request ID;

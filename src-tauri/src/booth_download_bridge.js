@@ -2,6 +2,7 @@
   "use strict";
 
   const BOOTH_LIBRARY_ORIGIN = "https://accounts.booth.pm";
+  const BOOTH_DOWNLOAD_ORIGIN = "https://booth.pm";
   const NOTIFICATION_HOST_ID = "booth-shelf-download-notifications";
   const NOTIFICATION_STYLE_ID = "booth-shelf-download-notification-style";
   const NOTIFICATION_DURATION_MS = 6000;
@@ -47,7 +48,12 @@
           font-size: 20px; font-weight: 800;
         }
         #${NOTIFICATION_HOST_ID} .booth-shelf-notification:not(.completed):not(.failed)
-          .booth-shelf-notification-icon { animation: booth-shelf-spin 1s linear infinite; }
+          .booth-shelf-notification-icon::before {
+            content: ""; width: 18px; height: 18px; box-sizing: border-box;
+            border: 2px solid #dbe1eb; border-top-color: currentColor;
+            border-radius: 50%; transform-origin: center;
+            animation: booth-shelf-spin 1s linear infinite;
+          }
         #${NOTIFICATION_HOST_ID} strong, #${NOTIFICATION_HOST_ID} span {
           display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         }
@@ -72,14 +78,14 @@
         @keyframes booth-shelf-spin { to { transform: rotate(360deg); } }
         @keyframes booth-shelf-expiry { from { transform: scaleX(1); } to { transform: scaleX(0); } }
       `;
-      document.documentElement.appendChild(style);
+      (document.head || document.documentElement).appendChild(style);
     }
     let host = document.getElementById(NOTIFICATION_HOST_ID);
     if (!host) {
       host = document.createElement("aside");
       host.id = NOTIFICATION_HOST_ID;
       host.setAttribute("aria-live", "polite");
-      document.documentElement.appendChild(host);
+      (document.body || document.documentElement).appendChild(host);
     }
     return host;
   };
@@ -94,7 +100,7 @@
       row = document.createElement("div");
       row.dataset.notificationKey = key;
       row.innerHTML = `
-        <div class="booth-shelf-notification-icon"></div>
+        <div class="booth-shelf-notification-icon" aria-hidden="true"></div>
         <div><strong></strong><span></span></div>
         <button type="button" aria-label="通知を閉じる">×</button>
         <div class="booth-shelf-notification-expiry" aria-hidden="true"></div>
@@ -118,7 +124,7 @@
     }
     row.className = `booth-shelf-notification ${String(status.state || "")}`;
     row.querySelector(".booth-shelf-notification-icon").textContent =
-      status.state === "completed" ? "✓" : status.state === "failed" ? "!" : "◌";
+      status.state === "completed" ? "✓" : status.state === "failed" ? "!" : "";
     const copy = status.state === "completed"
       ? ["ダウンロード完了", "ダウンロードが完了しました。"]
       : status.state === "failed"
@@ -204,20 +210,25 @@
   };
   const parseDownloadUrl = (value) => {
     let url;
-    try { url = new URL(value, window.location.href); } catch { return null; }
+    try { url = new URL(value, BOOTH_DOWNLOAD_ORIGIN); } catch { return null; }
     if (url.protocol !== "https:" || url.hostname !== "booth.pm") return null;
     const match = url.pathname.match(/^\/downloadables\/([1-9]\d*)\/?$/);
     const variationValues = url.searchParams.getAll("variation_id");
-    if (!match || variationValues.length !== 1) return null;
+    if (!match || variationValues.length > 1) return null;
     const downloadableId = positiveInteger(match[1]);
-    const variationId = positiveInteger(variationValues[0]);
+    const variationId = variationValues.length === 1
+      ? positiveInteger(variationValues[0])
+      : downloadableId;
     if (!downloadableId || !variationId) return null;
     return { href: url.href, downloadableId, variationId };
   };
   const itemIdFromHref = (value) => {
     let url;
     try { url = new URL(value, window.location.href); } catch { return null; }
-    if (url.protocol !== "https:" || url.hostname !== "booth.pm") return null;
+    if (
+      url.protocol !== "https:" ||
+      !(url.hostname === "booth.pm" || url.hostname.endsWith(".booth.pm"))
+    ) return null;
     const match = url.pathname.match(/^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?items\/([1-9]\d*)\/?$/i);
     return match ? positiveInteger(match[1]) : null;
   };
@@ -243,11 +254,25 @@
     if (!Array.isArray(items)) return [];
     return items.map((item) => item && typeof item.path === "string" ? item.path : null).filter(Boolean);
   };
+  const labeledControlContainer = (element, label) => {
+    let container = element;
+    let labeled = null;
+    for (let depth = 0; container && depth < 8; depth += 1) {
+      if (normalize(container.getAttribute("data-label")) === normalize(label)) {
+        labeled ||= container;
+        if (container.hasAttribute("data-dropdown-items")) return container;
+      }
+      container = container.parentElement;
+    }
+    return labeled || element;
+  };
   const contextByDownload = new Map();
+  let directDownloadByControl = new WeakMap();
   const downloadKey = ({ downloadableId, variationId }) => `${downloadableId}:${variationId}`;
   const enhance = () => {
     simplifyLibraryChrome();
     contextByDownload.clear();
+    const nextDirectDownloads = new WeakMap();
     const validAlternatives = new Set();
     for (const button of actionElements(document)) {
       if (!labelIs(button, DOWNLOAD_LABEL)) continue;
@@ -257,16 +282,22 @@
       if (!itemId) continue;
       const candidates = [];
       if (button.matches("a[href]")) candidates.push(button.href);
-      candidates.push(...dropdownUrls(button));
+      const downloadControl = labeledControlContainer(button, DOWNLOAD_LABEL);
+      const directHref = downloadControl.getAttribute("data-href");
+      if (directHref) candidates.push(directHref);
+      candidates.push(...dropdownUrls(downloadControl));
       const downloads = candidates.map(parseDownloadUrl).filter(Boolean);
       if (downloads.length === 0) continue;
       for (const download of downloads) contextByDownload.set(downloadKey(download), itemId);
-      pair.alternative.classList.add(HIDDEN_CLASS);
-      validAlternatives.add(pair.alternative);
+      if (downloads.length === 1) nextDirectDownloads.set(button, downloads[0]);
+      const alternativeControl = labeledControlContainer(pair.alternative, ALTERNATIVE_LABEL);
+      alternativeControl.classList.add(HIDDEN_CLASS);
+      validAlternatives.add(alternativeControl);
     }
     for (const hidden of document.querySelectorAll(`.${HIDDEN_CLASS}`)) {
       if (!validAlternatives.has(hidden)) hidden.classList.remove(HIDDEN_CLASS);
     }
+    directDownloadByControl = nextDirectDownloads;
   };
 
   const pendingIntents = new Map();
@@ -283,7 +314,10 @@
     if (!pending) return;
     window.clearTimeout(pending.timer);
     pendingIntents.delete(key);
-    window.location.assign(pending.href);
+    window.__boothShelfNotify({ requestId: key, state: "downloading" });
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => window.location.assign(pending.href));
+    });
   };
   window.__boothShelfRejectDownloadIntent = (requestId) => rejectIntent(String(requestId));
   const registerDownloadIntent = (download, itemId) => {
@@ -307,6 +341,7 @@
     const style = document.createElement("style");
     style.textContent = `
       .${HIDDEN_CLASS}, .${HIDDEN_CHROME_CLASS} { display: none !important; }
+      [data-label="${ALTERNATIVE_LABEL}"] { display: none !important; }
       [${LIBRARY_MAIN_ATTRIBUTE}="true"] { margin-top: 0 !important; padding-top: 16px !important; }
     `;
     document.documentElement.appendChild(style);
@@ -314,12 +349,12 @@
       const target = event.target;
       if (!(target instanceof Element)) return;
       const link = target.closest("a[href]");
-      if (!link) return;
-      const download = parseDownloadUrl(link.href);
+      const control = target.closest('button, a, [role="button"], [role="menuitem"]');
+      const download = link ? parseDownloadUrl(link.href) : directDownloadByControl.get(control);
       if (!download) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      const itemId = contextByDownload.get(downloadKey(download)) || findItemId(link);
+      const itemId = contextByDownload.get(downloadKey(download)) || (link && findItemId(link));
       if (!itemId) {
         window.__boothShelfNotify({ requestId: crypto.randomUUID(), state: "failed" });
         return;

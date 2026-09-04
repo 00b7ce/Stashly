@@ -25,6 +25,7 @@ const OPEN_FOLDER_ACTION_HOST: &str = "open-product-folder";
 const DOWNLOAD_INTENT_ACTION_HOST: &str = "download-intent";
 const DOWNLOAD_INTENT_LIFETIME: Duration = Duration::from_secs(10);
 const COMPLETED_ACTION_LIFETIME: Duration = Duration::from_secs(30);
+const COMPLETED_NOTIFICATION_REPLAY_LIFETIME: Duration = Duration::from_secs(6);
 const BOOTH_DOWNLOAD_BRIDGE: &str = include_str!("booth_download_bridge.js");
 
 #[derive(Serialize)]
@@ -88,11 +89,20 @@ impl BrowserLocations {
 
 #[derive(Clone, Default)]
 pub(crate) struct ActiveDownloadNotifications {
-    statuses: Arc<Mutex<HashMap<String, DownloadState>>>,
+    statuses: Arc<Mutex<HashMap<String, StoredDownloadNotification>>>,
+}
+
+struct StoredDownloadNotification {
+    state: DownloadState,
+    replay_until: Option<Instant>,
 }
 
 impl ActiveDownloadNotifications {
     pub(crate) fn update(&self, event: &DownloadStatusEvent) {
+        self.update_at(event, Instant::now());
+    }
+
+    fn update_at(&self, event: &DownloadStatusEvent, now: Instant) {
         if uuid::Uuid::parse_str(&event.request_id).is_err() {
             return;
         }
@@ -101,21 +111,45 @@ impl ActiveDownloadNotifications {
         };
         match event.state {
             DownloadState::Downloading => {
-                statuses.insert(event.request_id.clone(), event.state);
+                statuses.insert(
+                    event.request_id.clone(),
+                    StoredDownloadNotification {
+                        state: event.state,
+                        replay_until: None,
+                    },
+                );
             }
-            DownloadState::Completed | DownloadState::Failed => {
+            DownloadState::Completed => {
+                statuses.insert(
+                    event.request_id.clone(),
+                    StoredDownloadNotification {
+                        state: event.state,
+                        replay_until: Some(now + COMPLETED_NOTIFICATION_REPLAY_LIFETIME),
+                    },
+                );
+            }
+            DownloadState::Failed => {
                 statuses.remove(&event.request_id);
             }
         }
     }
 
     fn snapshot(&self) -> Vec<(String, DownloadState)> {
-        let Ok(statuses) = self.statuses.lock() else {
+        self.snapshot_at(Instant::now())
+    }
+
+    fn snapshot_at(&self, now: Instant) -> Vec<(String, DownloadState)> {
+        let Ok(mut statuses) = self.statuses.lock() else {
             return Vec::new();
         };
+        statuses.retain(|_, notification| {
+            notification
+                .replay_until
+                .is_none_or(|replay_until| replay_until > now)
+        });
         let mut snapshot = statuses
             .iter()
-            .map(|(request_id, state)| (request_id.clone(), *state))
+            .map(|(request_id, notification)| (request_id.clone(), notification.state))
             .collect::<Vec<_>>();
         snapshot.sort_unstable_by(|left, right| left.0.cmp(&right.0));
         snapshot
@@ -715,7 +749,11 @@ fn native_download_url_matches(url: &Url, intent: &NativeDownloadIntent) -> bool
         .filter(|(key, _)| key == "variation_id")
         .map(|(_, value)| value.into_owned())
         .collect::<Vec<_>>();
-    variations.len() == 1 && variations[0] == intent.variation_id.to_string()
+    match variations.as_slice() {
+        [] => intent.variation_id == intent.downloadable_id,
+        [variation_id] => variation_id == &intent.variation_id.to_string(),
+        _ => false,
+    }
 }
 
 fn emit_intent_failure(app: &AppHandle, intent: &NativeDownloadIntent, message: String) {
@@ -892,7 +930,17 @@ mod tests {
             &Url::parse("https://s6.booth.pm/signed-response").unwrap(),
             &intent
         ));
+
+        let queryless_intent = NativeDownloadIntent {
+            variation_id: 789,
+            ..intent.clone()
+        };
+        assert!(native_download_url_matches(
+            &Url::parse("https://booth.pm/downloadables/789").unwrap(),
+            &queryless_intent
+        ));
         for rejected in [
+            "https://booth.pm/downloadables/789",
             "https://booth.pm/downloadables/790?variation_id=456",
             "https://booth.pm/downloadables/789?variation_id=457",
             "https://s6.booth.pm.example.test/signed-response",
@@ -976,8 +1024,9 @@ mod tests {
     }
 
     #[test]
-    fn active_download_notifications_are_replaced_and_removed_by_terminal_states() {
+    fn active_download_notifications_retain_completed_state_for_page_replay() {
         let notifications = ActiveDownloadNotifications::default();
+        let now = Instant::now();
         let request_id = "7cf15df3-9714-4ff5-bf56-ab976127be9d";
         let mut event = DownloadStatusEvent {
             request_id: request_id.into(),
@@ -987,29 +1036,37 @@ mod tests {
             message: "Queued".into(),
         };
 
-        notifications.update(&event);
+        notifications.update_at(&event, now);
         assert_eq!(
-            notifications.snapshot(),
+            notifications.snapshot_at(now),
             vec![(request_id.into(), DownloadState::Downloading)]
         );
 
         event.state = DownloadState::Downloading;
-        notifications.update(&event);
+        notifications.update_at(&event, now);
         assert_eq!(
-            notifications.snapshot(),
+            notifications.snapshot_at(now),
             vec![(request_id.into(), DownloadState::Downloading)]
         );
 
         event.state = DownloadState::Completed;
-        notifications.update(&event);
-        assert!(notifications.snapshot().is_empty());
+        notifications.update_at(&event, now);
+        assert_eq!(
+            notifications.snapshot_at(now),
+            vec![(request_id.into(), DownloadState::Completed)]
+        );
+        assert!(
+            notifications
+                .snapshot_at(now + COMPLETED_NOTIFICATION_REPLAY_LIFETIME)
+                .is_empty()
+        );
 
         event.request_id = "027584e5-c497-44f2-830b-4172bed74a23".into();
         event.state = DownloadState::Downloading;
-        notifications.update(&event);
+        notifications.update_at(&event, now);
         event.state = DownloadState::Failed;
-        notifications.update(&event);
-        assert!(notifications.snapshot().is_empty());
+        notifications.update_at(&event, now);
+        assert!(notifications.snapshot_at(now).is_empty());
     }
 
     #[test]
@@ -1042,6 +1099,13 @@ mod tests {
         assert!(BOOTH_DOWNLOAD_BRIDGE.contains("variation_id"));
         assert!(BOOTH_DOWNLOAD_BRIDGE.contains("__boothShelfAcceptDownloadIntent"));
         assert!(BOOTH_DOWNLOAD_BRIDGE.contains("window.location.assign(pending.href)"));
+        let notify = BOOTH_DOWNLOAD_BRIDGE
+            .find("window.__boothShelfNotify({ requestId: key, state: \"downloading\" });")
+            .expect("the bridge should show the in-progress notification");
+        let navigate = BOOTH_DOWNLOAD_BRIDGE
+            .find("window.location.assign(pending.href)")
+            .expect("the bridge should follow the official download URL");
+        assert!(notify < navigate);
     }
 
     #[test]
