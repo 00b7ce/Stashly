@@ -3,6 +3,7 @@ mod commands;
 mod db;
 mod download;
 mod error;
+mod metadata;
 mod model;
 mod security;
 mod storage;

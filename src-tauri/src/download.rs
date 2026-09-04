@@ -2,23 +2,19 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::Duration,
 };
 
-use reqwest::redirect::{Attempt, Policy};
-use scraper::{Html, Selector};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::{fs, io::AsyncReadExt};
-use url::Url;
 use uuid::Uuid;
 
 use crate::{
     db::Database,
     error::{AppError, AppResult},
-    model::UpsertProductInput,
+    metadata,
     model::{DownloadRequest, DownloadState, DownloadStatusEvent},
-    security::{ensure_within_root, is_allowed_browser_url, product_directory},
+    security::{ensure_within_root, product_directory},
 };
 
 pub const DOWNLOAD_EVENT: &str = "download-status";
@@ -110,22 +106,18 @@ pub(crate) async fn finish_native_download(
 ) {
     let result = hash_native_staging_file(&root, &staging_path).await;
     let result = match result {
-        Ok((hash, byte_size)) => match build_metadata_client() {
-            Ok(metadata_client) => {
-                finalize_download(
-                    &metadata_client,
-                    &database,
-                    &request,
-                    &root,
-                    &staging_path,
-                    &hash,
-                    byte_size,
-                    None,
-                )
-                .await
-            }
-            Err(error) => Err(error),
-        },
+        Ok((hash, byte_size)) => {
+            finalize_download(
+                &database,
+                &request,
+                &root,
+                &staging_path,
+                &hash,
+                byte_size,
+                None,
+            )
+            .await
+        }
         Err(error) => Err(error),
     };
 
@@ -175,26 +167,8 @@ async fn hash_native_staging_file(root: &Path, staging_path: &Path) -> AppResult
     Ok((hex::encode(hasher.finalize()), byte_size))
 }
 
-fn build_metadata_client() -> AppResult<reqwest::Client> {
-    let redirect_policy = Policy::custom(|attempt: Attempt<'_>| {
-        if attempt.previous().len() >= 5 || !is_allowed_browser_url(attempt.url()) {
-            attempt.stop()
-        } else {
-            attempt.follow()
-        }
-    });
-    reqwest::Client::builder()
-        .redirect(redirect_policy)
-        .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(30))
-        .user_agent(concat!("StashlyForBOOTH/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|_| AppError::Network("could not initialize the metadata client".into()))
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn finalize_download(
-    metadata_client: &reqwest::Client,
     database: &Database,
     request: &DownloadRequest,
     root: &Path,
@@ -207,10 +181,10 @@ async fn finalize_download(
     if let Some(filename) = response_filename {
         enriched_request.filename = filename;
     }
-    if let Some(product) = fetch_product_metadata(metadata_client, request.item_id).await {
+    if let Some(product) = metadata::product_metadata_for_download(database, request.item_id).await
+    {
         enriched_request.product_name = Some(product.name.clone());
         enriched_request.shop_name = Some(product.shop_name.clone());
-        database.upsert_product(&product)?;
     }
     database.ensure_download_metadata(&enriched_request)?;
     let fallback_name = format!("BOOTH item {}", request.item_id);
@@ -469,70 +443,6 @@ fn sanitize_archive_path(path: &Path) -> AppResult<PathBuf> {
     Ok(safe)
 }
 
-async fn fetch_product_metadata(
-    client: &reqwest::Client,
-    item_id: i64,
-) -> Option<UpsertProductInput> {
-    let product_url = format!("https://booth.pm/ja/items/{item_id}");
-    let response = client.get(&product_url).send().await.ok()?;
-    if !response.status().is_success() || !is_allowed_browser_url(response.url()) {
-        return None;
-    }
-    let body = response.bytes().await.ok()?;
-    if body.len() > 4 * 1024 * 1024 {
-        return None;
-    }
-    let text = std::str::from_utf8(&body).ok()?;
-    parse_product_metadata(text, item_id, product_url)
-}
-
-fn parse_product_metadata(
-    text: &str,
-    item_id: i64,
-    product_url: String,
-) -> Option<UpsertProductInput> {
-    let document = Html::parse_document(text);
-    let title_selector = Selector::parse("meta[property='og:title']").ok()?;
-    let image_selector = Selector::parse("meta[property='og:image']").ok()?;
-    let raw_title = document
-        .select(&title_selector)
-        .next()?
-        .value()
-        .attr("content")?
-        .trim();
-    let without_booth = raw_title
-        .strip_suffix(" - BOOTH")
-        .or_else(|| raw_title.strip_suffix(" | BOOTH"))
-        .unwrap_or(raw_title);
-    let (name, shop_name) = without_booth
-        .rsplit_once(" - ")
-        .map(|(name, shop)| (name.trim(), shop.trim()))
-        .unwrap_or((without_booth, "BOOTH"));
-    if name.is_empty() {
-        return None;
-    }
-    let thumbnail_url = document
-        .select(&image_selector)
-        .next()
-        .and_then(|element| element.value().attr("content"))
-        .and_then(|value| Url::parse(value).ok())
-        .filter(|url| {
-            url.scheme() == "https"
-                && url.host_str().is_some_and(|host| {
-                    host == "booth.pximg.net" || host.ends_with(".booth.pximg.net")
-                })
-        })
-        .map(|url| url.to_string());
-    Some(UpsertProductInput {
-        item_id,
-        name: name.to_owned(),
-        shop_name: shop_name.to_owned(),
-        shop_subdomain: None,
-        product_url,
-        thumbnail_url,
-    })
-}
-
 pub fn emit(app: &AppHandle, request: &DownloadRequest, state: DownloadState, message: &str) {
     emit_event(
         app,
@@ -563,26 +473,9 @@ mod tests {
 
     use super::{
         DownloadQueue, EnqueueError, extract_zip_safely, hash_native_staging_file, is_zip_filename,
-        parse_product_metadata, publish_extracted_directory, redundant_single_root,
-        sanitize_archive_path,
+        publish_extracted_directory, redundant_single_root, sanitize_archive_path,
     };
     use crate::error::AppError;
-
-    #[test]
-    fn reads_public_product_open_graph_metadata() {
-        let html = r#"<html><head>
-          <meta property="og:title" content="Star Accessory - Moon Shop - BOOTH">
-          <meta property="og:image" content="https://booth.pximg.net/example.png">
-        </head></html>"#;
-        let product =
-            parse_product_metadata(html, 123, "https://booth.pm/ja/items/123".into()).unwrap();
-        assert_eq!(product.name, "Star Accessory");
-        assert_eq!(product.shop_name, "Moon Shop");
-        assert_eq!(
-            product.thumbnail_url.as_deref(),
-            Some("https://booth.pximg.net/example.png")
-        );
-    }
 
     #[test]
     fn safely_extracts_nested_zip_contents() {

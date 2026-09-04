@@ -108,20 +108,10 @@ fn prune_empty_parents(root: &Path, start: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{DownloadRequest, UpsertProductInput};
+    use crate::model::DownloadRequest;
     use tempfile::tempdir;
 
     fn add_artifact(database: &Database, path: &Path) {
-        database
-            .upsert_product(&UpsertProductInput {
-                item_id: 123,
-                name: "Example".into(),
-                shop_name: "Shop".into(),
-                shop_subdomain: None,
-                product_url: "https://booth.pm/ja/items/123".into(),
-                thumbnail_url: None,
-            })
-            .unwrap();
         let request = DownloadRequest {
             request_id: "request-1".into(),
             item_id: 123,

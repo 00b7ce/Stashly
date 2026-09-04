@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 
 use crate::{
     error::{AppError, AppResult},
@@ -55,12 +55,34 @@ CREATE TABLE IF NOT EXISTS artifacts (
 
 CREATE INDEX IF NOT EXISTS artifacts_item_id_idx ON artifacts(item_id);
 CREATE INDEX IF NOT EXISTS artifacts_downloaded_at_idx ON artifacts(downloaded_at DESC);
+
+CREATE TABLE IF NOT EXISTS product_metadata_fetches (
+    item_id INTEGER PRIMARY KEY NOT NULL,
+    last_attempt_at INTEGER NOT NULL,
+    last_success_at INTEGER
+);
 "#;
+
+const METADATA_LAST_REQUEST_KEY: &str = "product_metadata_last_request_at";
+const METADATA_PAUSED_UNTIL_KEY: &str = "product_metadata_paused_until";
 
 #[derive(Debug, Clone)]
 pub struct ArtifactLocation {
     pub artifact_id: String,
     pub local_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MetadataFetchPolicy {
+    pub success_cache_seconds: i64,
+    pub failed_retry_seconds: i64,
+    pub minimum_interval_seconds: i64,
+}
+
+#[derive(Debug)]
+pub enum MetadataFetchReservation {
+    Fetch { stale: Option<UpsertProductInput> },
+    Skip { cached: Option<UpsertProductInput> },
 }
 
 #[derive(Debug, Clone)]
@@ -153,26 +175,81 @@ impl Database {
         Ok(count > 0)
     }
 
-    pub fn upsert_product(&self, input: &UpsertProductInput) -> AppResult<()> {
-        let connection = self.open()?;
-        connection.execute(
-            "INSERT INTO products(item_id, name, shop_name, shop_subdomain, product_url, thumbnail_url) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
-             ON CONFLICT(item_id) DO UPDATE SET \
-               name = excluded.name, shop_name = excluded.shop_name, \
-               shop_subdomain = excluded.shop_subdomain, product_url = excluded.product_url, \
-               thumbnail_url = excluded.thumbnail_url, \
-               updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
-            params![
-                input.item_id,
-                input.name,
-                input.shop_name,
-                input.shop_subdomain,
-                input.product_url,
-                input.thumbnail_url
-            ],
+    pub fn reserve_product_metadata_fetch(
+        &self,
+        item_id: i64,
+        now: i64,
+        policy: MetadataFetchPolicy,
+    ) -> AppResult<MetadataFetchReservation> {
+        let mut connection = self.open()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let cached = cached_product_metadata(&transaction, item_id)?;
+        let paused_until = setting_i64(&transaction, METADATA_PAUSED_UNTIL_KEY)?;
+        if paused_until.is_some_and(|until| until > now) {
+            transaction.commit()?;
+            return Ok(MetadataFetchReservation::Skip { cached });
+        }
+
+        let fetch_times = transaction
+            .query_row(
+                "SELECT last_attempt_at, last_success_at FROM product_metadata_fetches WHERE item_id = ?1",
+                [item_id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?)),
+            )
+            .optional()?;
+        if let Some((last_attempt, last_success)) = fetch_times {
+            let success_is_fresh = last_success.is_some_and(|last_success| {
+                elapsed_seconds(now, last_success) < policy.success_cache_seconds
+            });
+            let attempt_is_recent =
+                elapsed_seconds(now, last_attempt) < policy.failed_retry_seconds;
+            if success_is_fresh || attempt_is_recent {
+                transaction.commit()?;
+                return Ok(MetadataFetchReservation::Skip { cached });
+            }
+        }
+
+        let last_global_request = setting_i64(&transaction, METADATA_LAST_REQUEST_KEY)?;
+        if last_global_request.is_some_and(|last_request| {
+            elapsed_seconds(now, last_request) < policy.minimum_interval_seconds
+        }) {
+            transaction.commit()?;
+            return Ok(MetadataFetchReservation::Skip { cached });
+        }
+
+        transaction.execute(
+            "INSERT INTO product_metadata_fetches(item_id, last_attempt_at) VALUES (?1, ?2) \
+             ON CONFLICT(item_id) DO UPDATE SET last_attempt_at = excluded.last_attempt_at",
+            params![item_id, now],
         )?;
+        set_setting_i64(&transaction, METADATA_LAST_REQUEST_KEY, now)?;
+        transaction.commit()?;
+        Ok(MetadataFetchReservation::Fetch { stale: cached })
+    }
+
+    pub fn record_product_metadata_fetch_success(
+        &self,
+        input: &UpsertProductInput,
+        now: i64,
+    ) -> AppResult<()> {
+        let mut connection = self.open()?;
+        let transaction = connection.transaction()?;
+        upsert_product_on(&transaction, input)?;
+        transaction.execute(
+            "INSERT INTO product_metadata_fetches(item_id, last_attempt_at, last_success_at) \
+             VALUES (?1, ?2, ?2) \
+             ON CONFLICT(item_id) DO UPDATE SET \
+               last_attempt_at = excluded.last_attempt_at, \
+               last_success_at = excluded.last_success_at",
+            params![input.item_id, now],
+        )?;
+        transaction.commit()?;
         Ok(())
+    }
+
+    pub fn pause_product_metadata_fetches_until(&self, until: i64) -> AppResult<()> {
+        let connection = self.open()?;
+        set_setting_i64(&connection, METADATA_PAUSED_UNTIL_KEY, until)
     }
 
     pub fn ensure_download_metadata(&self, request: &DownloadRequest) -> AppResult<()> {
@@ -293,8 +370,11 @@ impl Database {
     }
 
     pub fn clear_library_index(&self) -> AppResult<()> {
-        let connection = self.open()?;
-        connection.execute("DELETE FROM products", [])?;
+        let mut connection = self.open()?;
+        let transaction = connection.transaction()?;
+        transaction.execute("DELETE FROM product_metadata_fetches", [])?;
+        transaction.execute("DELETE FROM products", [])?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -330,11 +410,97 @@ impl Database {
     }
 }
 
+fn upsert_product_on(connection: &Connection, input: &UpsertProductInput) -> AppResult<()> {
+    connection.execute(
+        "INSERT INTO products(item_id, name, shop_name, shop_subdomain, product_url, thumbnail_url) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+         ON CONFLICT(item_id) DO UPDATE SET \
+           name = excluded.name, shop_name = excluded.shop_name, \
+           shop_subdomain = excluded.shop_subdomain, product_url = excluded.product_url, \
+           thumbnail_url = excluded.thumbnail_url, \
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+        params![
+            input.item_id,
+            input.name,
+            input.shop_name,
+            input.shop_subdomain,
+            input.product_url,
+            input.thumbnail_url
+        ],
+    )?;
+    Ok(())
+}
+
+fn cached_product_metadata(
+    connection: &Connection,
+    item_id: i64,
+) -> AppResult<Option<UpsertProductInput>> {
+    connection
+        .query_row(
+            "SELECT p.item_id, p.name, p.shop_name, p.shop_subdomain, p.product_url, p.thumbnail_url \
+             FROM products p \
+             JOIN product_metadata_fetches f ON f.item_id = p.item_id \
+             WHERE p.item_id = ?1 AND f.last_success_at IS NOT NULL",
+            [item_id],
+            |row| {
+                Ok(UpsertProductInput {
+                    item_id: row.get(0)?,
+                    name: row.get(1)?,
+                    shop_name: row.get(2)?,
+                    shop_subdomain: row.get(3)?,
+                    product_url: row.get(4)?,
+                    thumbnail_url: row.get(5)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(AppError::from)
+}
+
+fn setting_i64(connection: &Connection, key: &str) -> AppResult<Option<i64>> {
+    let value = connection
+        .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
+            row.get::<_, String>(0)
+        })
+        .optional()?;
+    Ok(value.and_then(|value| value.parse().ok()))
+}
+
+fn set_setting_i64(connection: &Connection, key: &str, value: i64) -> AppResult<()> {
+    connection.execute(
+        "INSERT INTO settings(key, value) VALUES (?1, ?2) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value.to_string()],
+    )?;
+    Ok(())
+}
+
+fn elapsed_seconds(now: i64, then: i64) -> i64 {
+    now.saturating_sub(then).max(0)
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    const METADATA_POLICY: MetadataFetchPolicy = MetadataFetchPolicy {
+        success_cache_seconds: 3_600,
+        failed_retry_seconds: 600,
+        minimum_interval_seconds: 10,
+    };
+
+    fn product_metadata(item_id: i64) -> UpsertProductInput {
+        UpsertProductInput {
+            item_id,
+            name: "Example".into(),
+            shop_name: "Shop".into(),
+            shop_subdomain: Some("shop".into()),
+            product_url: format!("https://booth.pm/ja/items/{item_id}"),
+            thumbnail_url: Some("https://booth.pximg.net/example.png".into()),
+        }
+    }
 
     #[test]
     fn initializes_and_persists_settings() {
@@ -421,19 +587,75 @@ mod tests {
         let directory = tempdir().expect("tempdir");
         let database = Database::initialize(directory.path().join("test.db")).expect("database");
         database
-            .upsert_product(&UpsertProductInput {
-                item_id: 123,
-                name: "Example".into(),
-                shop_name: "Shop".into(),
-                shop_subdomain: Some("shop".into()),
-                product_url: "https://booth.pm/ja/items/123".into(),
-                thumbnail_url: None,
-            })
+            .record_product_metadata_fetch_success(&product_metadata(123), 1_000)
             .expect("upsert");
 
         let products = database.list_products().expect("products");
         assert_eq!(products.len(), 1);
         assert_eq!(products[0].item_id, 123);
+    }
+
+    #[test]
+    fn metadata_fetch_reservations_are_cached_and_rate_limited() {
+        let directory = tempdir().expect("tempdir");
+        let database = Database::initialize(directory.path().join("test.db")).expect("database");
+
+        assert!(matches!(
+            database
+                .reserve_product_metadata_fetch(123, 1_000, METADATA_POLICY)
+                .expect("first reservation"),
+            MetadataFetchReservation::Fetch { stale: None }
+        ));
+        assert!(matches!(
+            database
+                .reserve_product_metadata_fetch(456, 1_005, METADATA_POLICY)
+                .expect("global rate limit"),
+            MetadataFetchReservation::Skip { cached: None }
+        ));
+
+        database
+            .record_product_metadata_fetch_success(&product_metadata(123), 1_000)
+            .expect("record success");
+        match database
+            .reserve_product_metadata_fetch(123, 2_000, METADATA_POLICY)
+            .expect("cached reservation")
+        {
+            MetadataFetchReservation::Skip {
+                cached: Some(cached),
+            } => assert_eq!(cached.name, "Example"),
+            reservation => panic!("unexpected reservation: {reservation:?}"),
+        }
+        assert!(matches!(
+            database
+                .reserve_product_metadata_fetch(123, 5_000, METADATA_POLICY)
+                .expect("stale reservation"),
+            MetadataFetchReservation::Fetch { stale: Some(_) }
+        ));
+    }
+
+    #[test]
+    fn metadata_fetch_pause_survives_new_reservations() {
+        let directory = tempdir().expect("tempdir");
+        let database_path = directory.path().join("test.db");
+        let database = Database::initialize(database_path.clone()).expect("database");
+        database
+            .pause_product_metadata_fetches_until(10_000)
+            .expect("pause metadata fetches");
+        drop(database);
+        let database = Database::initialize(database_path).expect("reopened database");
+
+        assert!(matches!(
+            database
+                .reserve_product_metadata_fetch(123, 5_000, METADATA_POLICY)
+                .expect("paused reservation"),
+            MetadataFetchReservation::Skip { cached: None }
+        ));
+        assert!(matches!(
+            database
+                .reserve_product_metadata_fetch(123, 10_000, METADATA_POLICY)
+                .expect("pause expired"),
+            MetadataFetchReservation::Fetch { stale: None }
+        ));
     }
 
     #[test]
