@@ -1,8 +1,8 @@
-# Booth Shelf project instructions
+# Stashly for BOOTH project instructions
 
 ## Purpose
 
-Booth Shelf is an unofficial Windows desktop library manager for files downloaded from BOOTH. It uses a dedicated, unprivileged BOOTH WebView and stores library metadata in its own SQLite database. It must not modify BOOTH Library Manager files, its SQLite database, or the global `booth-library-manager://` protocol registration.
+Stashly for BOOTH is an unofficial Windows desktop library manager for files downloaded from BOOTH. It uses a dedicated, unprivileged BOOTH WebView and stores library metadata in its own SQLite database. It must not modify BOOTH Library Manager files, its SQLite database, or the global `booth-library-manager://` protocol registration.
 
 ## Architecture
 

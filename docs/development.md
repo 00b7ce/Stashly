@@ -17,6 +17,8 @@ npm.cmd run tauri -- dev
 
 The first launch creates only application-owned state. Choose a new library root; do not select a BOOTH Library Manager directory for destructive testing.
 
+Debug builds may set the task-specific `STASHLY_DEV_DATA_DIR` environment variable to an absolute temporary directory. Only the app SQLite database is redirected; use it for isolated test data and remove the temporary directory after capture. Release builds ignore this variable.
+
 ## Verification
 
 ```powershell
@@ -35,6 +37,7 @@ For a manual download test, use a free item already present in the user's accoun
 - primary-clicking the displayed URL copies the visible sanitized value and shows the confirmation popup; right-clicking opens no context menu, and the address cannot be edited, selected, or dragged;
 - authentication parameters, fragments, and non-page library query parameters are absent from the displayed and copied URL;
 - collapsing the sidebar leaves recognizable menu icons and expands the embedded page, while expanding it restores the labels;
+- both expanded and collapsed sidebars keep an explicit `BOOTH非公式アプリ`/`非公式` marker visible beside the neutral Stashly branding;
 - Settings remains directly above the sidebar collapse control in both expanded and collapsed layouts;
 - system, light, and dark theme choices update the local UI immediately and persist after restart;
 - preset and custom accent colors update local controls immediately, retain readable foreground contrast, and persist after restart;
@@ -42,7 +45,7 @@ For a manual download test, use a free item already present in the user's accoun
 - switching between local library, BOOTH, BOOTH library, and Settings preserves the expected page and focus, including each BOOTH destination's last loaded page during the current application session;
 - the local library heading, search field, view selector, and refresh action share one row; all three grid sizes and the horizontal list layout remain usable at the minimum window width;
 - the `booth-browser` child WebView cannot invoke local commands, dialogs, opener APIs, or filesystem functionality;
-- the normal BOOTH library download button starts the Booth Shelf flow and its paired alternative-download control is hidden;
+- the normal BOOTH library download button starts the Stashly for BOOTH flow and its paired alternative-download control is hidden;
 - a DOM mismatch keeps the alternative-download control hidden but refuses to arm the normal download instead of guessing product or download IDs;
 - no download intent or signed URL appears in logs or SQLite;
 - the file lands under the selected test root;
@@ -52,7 +55,16 @@ For a manual download test, use a free item already present in the user's accoun
 - traversal entries, links, more than 20,000 entries, and more than 16 GiB of expanded data are rejected without a partial final directory;
 - the global `booth-library-manager://` handler still points to the official application;
 - the existing BOOTH Library Manager database and download root are unchanged.
-- Settings shows the configured root once, and changing it updates subsequent downloads;
+- a local fixed-drive root is accepted without an external-storage warning;
+- UNC, mapped-network, recognized sync, removable, and unknown roots show the exact candidate path and require the acknowledgement checkbox before they can be saved;
+- cancelling the external-storage confirmation preserves the previous root, while confirming it records consent only for that canonical root and storage kind;
+- the candidate probe verifies create, write, flush, rename, and delete support without leaving a test file behind;
+- a disconnected or changed non-local root fails closed before a download, and legacy non-local roots require confirmation after upgrade;
+- changing to a different root is rejected while downloads/cleanup are active or while indexed artifacts would be orphaned;
+- a second download of the same product within 30 days reuses SQLite Open Graph metadata without another product-page request;
+- failed metadata requests are not retried for 24 hours, requests for different products remain at least ten seconds apart, and a simulated `429` persists a global pause across database reopen;
+- metadata requests use the documented Stashly for BOOTH User-Agent and reject redirects outside exact public BOOTH product URLs, non-HTML responses, oversized HTML heads, and non-BOOTH image hosts;
+- metadata refresh failure does not prevent the downloaded artifact from being finalized;
 - Settings shows the packaged application version and an explicit nonofficial notice; the terms and privacy links open the expected official pages in the system browser under a separate official-information heading, with no BOOTH support link presented as the app's support contact;
 - the delete action opens a themed in-app confirmation, initially focuses Cancel, closes on Escape, and does not delete until the destructive button is explicitly chosen;
 - Settings displays a normal drive or UNC path without the Windows verbatim `\\?\` prefix;
@@ -61,7 +73,7 @@ For a manual download test, use a free item already present in the user's accoun
 - cleanup is rejected while a download is active.
 - the BOOTH browser-data action opens a themed in-app confirmation, defaults focus to Cancel, and closes on Escape or a backdrop click;
 - cancelling browser-data cleanup preserves the BOOTH login, while confirming it removes the dedicated profile's cookies, cache, history, and local storage and requires BOOTH/pixiv login again;
-- browser-data cleanup leaves downloaded artifacts, the Booth Shelf SQLite library, and local UI preferences unchanged.
+- browser-data cleanup leaves downloaded artifacts, the Stashly for BOOTH SQLite library, and local UI preferences unchanged.
 
 ## Packaging
 
