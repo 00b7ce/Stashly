@@ -20,7 +20,7 @@ use crate::{
 pub const BROWSER_LABEL: &str = "booth-browser";
 const MAIN_WINDOW_LABEL: &str = "main";
 const BROWSER_LOCATION_EVENT: &str = "booth-browser-location";
-const LOCAL_ACTION_SCHEME: &str = "booth-shelf";
+const LOCAL_ACTION_SCHEME: &str = "stashly";
 const OPEN_FOLDER_ACTION_HOST: &str = "open-product-folder";
 const DOWNLOAD_INTENT_ACTION_HOST: &str = "download-intent";
 const DOWNLOAD_INTENT_LIFETIME: Duration = Duration::from_secs(10);
@@ -533,7 +533,7 @@ fn eval_download_notification<R: Runtime>(webview: &Webview<R>, status: BrowserD
     let Ok(payload) = serde_json::to_string(&status) else {
         return;
     };
-    let _ = webview.eval(format!("window.__boothShelfNotify?.({payload});"));
+    let _ = webview.eval(format!("window.__stashlyNotify?.({payload});"));
 }
 
 fn download_intent_request_id(url: &Url) -> Option<String> {
@@ -589,9 +589,9 @@ fn acknowledge_download_intent(app: &AppHandle, request_id: &str, accepted: bool
         return;
     };
     let callback = if accepted {
-        "__boothShelfAcceptDownloadIntent"
+        "__stashlyAcceptDownloadIntent"
     } else {
-        "__boothShelfRejectDownloadIntent"
+        "__stashlyRejectDownloadIntent"
     };
     let _ = webview.eval(format!("window.{callback}?.({request_id});"));
 }
@@ -710,7 +710,7 @@ fn prepare_native_download(
         }
     }
 
-    let staging_dir = root.join(".booth-shelf-staging");
+    let staging_dir = root.join(".stashly-staging");
     ensure_within_root(&root, &staging_dir)?;
     std::fs::create_dir_all(&staging_dir)?;
     let staging_dir = std::fs::canonicalize(staging_dir)?;
@@ -874,7 +874,7 @@ mod tests {
     fn download_intent_accepts_only_exact_positive_fields() {
         let request_id = "7cf15df3-9714-4ff5-bf56-ab976127be9d";
         let valid = Url::parse(&format!(
-            "booth-shelf://download-intent?request_id={request_id}&item_id=123&variation_id=456&downloadable_id=789"
+            "stashly://download-intent?request_id={request_id}&item_id=123&variation_id=456&downloadable_id=789"
         ))
         .unwrap();
         let intent = download_intent_from_url(&valid).unwrap();
@@ -884,10 +884,10 @@ mod tests {
         assert_eq!(intent.downloadable_id, 789);
 
         for invalid in [
-            "booth-shelf://download-intent?request_id=bad&item_id=1&variation_id=2&downloadable_id=3",
-            "booth-shelf://download-intent?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d&item_id=0&variation_id=2&downloadable_id=3",
-            "booth-shelf://download-intent?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d&item_id=1&variation_id=2&downloadable_id=3&extra=4",
-            "booth-shelf://download-intent/path?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d&item_id=1&variation_id=2&downloadable_id=3",
+            "stashly://download-intent?request_id=bad&item_id=1&variation_id=2&downloadable_id=3",
+            "stashly://download-intent?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d&item_id=0&variation_id=2&downloadable_id=3",
+            "stashly://download-intent?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d&item_id=1&variation_id=2&downloadable_id=3&extra=4",
+            "stashly://download-intent/path?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d&item_id=1&variation_id=2&downloadable_id=3",
             "https://accounts.booth.pm/library?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d&item_id=1&variation_id=2&downloadable_id=3",
         ] {
             assert!(download_intent_from_url(&Url::parse(invalid).unwrap()).is_none());
@@ -1116,8 +1116,8 @@ mod tests {
     fn download_bridge_is_origin_scoped_and_does_not_expose_tauri_ipc() {
         assert!(BOOTH_DOWNLOAD_BRIDGE.contains("https://accounts.booth.pm"));
         assert!(!BOOTH_DOWNLOAD_BRIDGE.contains("booth-library-manager://"));
-        assert!(BOOTH_DOWNLOAD_BRIDGE.contains("booth-shelf://download-intent"));
-        assert!(!BOOTH_DOWNLOAD_BRIDGE.contains("data-booth-shelf-theme"));
+        assert!(BOOTH_DOWNLOAD_BRIDGE.contains("stashly://download-intent"));
+        assert!(!BOOTH_DOWNLOAD_BRIDGE.contains("data-stashly-theme"));
         assert!(!BOOTH_DOWNLOAD_BRIDGE.contains("__TAURI__"));
         assert!(!BOOTH_DOWNLOAD_BRIDGE.contains("invoke("));
     }
@@ -1126,10 +1126,10 @@ mod tests {
     fn download_bridge_uses_the_official_download_url_after_acknowledgement() {
         assert!(BOOTH_DOWNLOAD_BRIDGE.contains("downloadables"));
         assert!(BOOTH_DOWNLOAD_BRIDGE.contains("variation_id"));
-        assert!(BOOTH_DOWNLOAD_BRIDGE.contains("__boothShelfAcceptDownloadIntent"));
+        assert!(BOOTH_DOWNLOAD_BRIDGE.contains("__stashlyAcceptDownloadIntent"));
         assert!(BOOTH_DOWNLOAD_BRIDGE.contains("window.location.assign(pending.href)"));
         let notify = BOOTH_DOWNLOAD_BRIDGE
-            .find("window.__boothShelfNotify({ requestId: key, state: \"downloading\" });")
+            .find("window.__stashlyNotify({ requestId: key, state: \"downloading\" });")
             .expect("the bridge should show the in-progress notification");
         let navigate = BOOTH_DOWNLOAD_BRIDGE
             .find("window.location.assign(pending.href)")
@@ -1156,10 +1156,10 @@ mod tests {
 
     #[test]
     fn download_bridge_exposes_a_one_way_notification_target() {
-        assert!(BOOTH_DOWNLOAD_BRIDGE.contains("window.__boothShelfNotify ="));
+        assert!(BOOTH_DOWNLOAD_BRIDGE.contains("window.__stashlyNotify ="));
         assert!(BOOTH_DOWNLOAD_BRIDGE.contains("status.requestId"));
         assert!(BOOTH_DOWNLOAD_BRIDGE.contains("status.state === \"completed\""));
-        assert!(BOOTH_DOWNLOAD_BRIDGE.contains("booth-shelf-notification-expiry"));
+        assert!(BOOTH_DOWNLOAD_BRIDGE.contains("stashly-notification-expiry"));
         assert!(!BOOTH_DOWNLOAD_BRIDGE.contains("status.message"));
         assert!(!BOOTH_DOWNLOAD_BRIDGE.contains("status.filename"));
         assert!(!BOOTH_DOWNLOAD_BRIDGE.contains("status.itemId"));
@@ -1170,16 +1170,16 @@ mod tests {
     fn folder_notification_action_accepts_only_one_uuid_request_id() {
         let request_id = "7cf15df3-9714-4ff5-bf56-ab976127be9d";
         let valid = Url::parse(&format!(
-            "booth-shelf://open-product-folder?request_id={request_id}"
+            "stashly://open-product-folder?request_id={request_id}"
         ))
         .unwrap();
         assert_eq!(open_folder_request_id(&valid).as_deref(), Some(request_id));
 
         for invalid in [
-            "booth-shelf://open-product-folder?request_id=not-a-uuid",
-            "booth-shelf://open-product-folder?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d&extra=true",
-            "booth-shelf://open-product-folder/path?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d",
-            "booth-shelf://other?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d",
+            "stashly://open-product-folder?request_id=not-a-uuid",
+            "stashly://open-product-folder?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d&extra=true",
+            "stashly://open-product-folder/path?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d",
+            "stashly://other?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d",
             "https://accounts.booth.pm/library?request_id=7cf15df3-9714-4ff5-bf56-ab976127be9d",
         ] {
             assert_eq!(open_folder_request_id(&Url::parse(invalid).unwrap()), None);
@@ -1257,7 +1257,8 @@ mod tests {
             opener["allow"],
             serde_json::json!([
                 { "url": "https://booth.pm/terms" },
-                { "url": "https://booth.pm/privacy" }
+                { "url": "https://booth.pm/privacy" },
+                { "url": "https://github.com/00b7ce/Stashly/issues" }
             ])
         );
     }
@@ -1317,7 +1318,7 @@ mod tests {
     fn profile_cleanup_removes_only_the_given_directory_and_accepts_missing_data() {
         let temp = tempfile::tempdir().unwrap();
         let profile = temp.path().join("booth-webview");
-        let sibling = temp.path().join("booth-shelf.db");
+        let sibling = temp.path().join("stashly.db");
         std::fs::create_dir_all(profile.join("Network")).unwrap();
         std::fs::write(profile.join("Network").join("Cookies"), b"private").unwrap();
         std::fs::write(&sibling, b"library").unwrap();

@@ -5,12 +5,14 @@
   "webviews": ["main"],
   "permissions": [
     "core:default",
+    "core:window:allow-close",
     "dialog:allow-open",
     {
       "identifier": "opener:allow-open-url",
       "allow": [
         { "url": "https://booth.pm/terms" },
-        { "url": "https://booth.pm/privacy" }
+        { "url": "https://booth.pm/privacy" },
+        { "url": "https://github.com/00b7ce/Stashly/issues" }
       ]
     },
     "allow-get-library",

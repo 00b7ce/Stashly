@@ -42,7 +42,7 @@ pub fn run() {
                 .path()
                 .app_local_data_dir()
                 .map_err(|_| AppError::MissingAppDataDirectory)?;
-            let database = Database::initialize(data_dir.join("booth-shelf.db"))?;
+            let database = Database::initialize(data_dir.join("stashly.db"))?;
             let download_queue = DownloadQueue::default();
             app.manage(AppState {
                 database: database.clone(),
@@ -66,5 +66,5 @@ pub fn run() {
             commands::delete_downloaded_files,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Stashly for BOOTH");
+        .expect("error while running Stashly");
 }

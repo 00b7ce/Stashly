@@ -12,7 +12,7 @@ use crate::{
     security::ensure_within_root,
 };
 
-const STAGING_DIRECTORY: &str = ".booth-shelf-staging";
+const STAGING_DIRECTORY: &str = ".stashly-staging";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

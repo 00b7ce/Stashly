@@ -1,13 +1,13 @@
 [package]
-name = "booth-shelf"
-version = "1.1.1"
-description = "Stashly for BOOTH, an unofficial local library manager for BOOTH downloads"
+name = "stashly"
+version = "1.2.0"
+description = "Stashly, an unofficial local library manager for BOOTH downloads"
 authors = ["mekabu"]
 license = "MIT"
 edition = "2024"
 
 [lib]
-name = "booth_shelf_lib"
+name = "stashly_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

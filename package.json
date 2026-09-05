@@ -1,7 +1,7 @@
 {
-  "name": "booth-shelf",
+  "name": "stashly",
   "private": true,
-  "version": "1.1.1",
+  "version": "1.2.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -16,7 +16,8 @@
     "@tauri-apps/plugin-opener": "^2.5.0",
     "lucide-react": "^0.544.0",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "react-dom": "^19.1.1",
+    "react-markdown": "^10.1.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.8.4",

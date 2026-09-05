@@ -63,7 +63,7 @@ describe("App navigation", () => {
     expect(markup.indexOf("sidebar-settings")).toBeLessThan(markup.indexOf("sidebar-toggle"));
     expect(markup).toContain("サイドバーを折りたたむ");
     expect(markup).toContain("Stashly");
-    expect(markup).toContain("for BOOTH");
+    expect(markup).not.toContain("for BOOTH");
     expect(markup).toContain("BOOTH非公式アプリ");
     expect(markup).toContain("unofficial-short");
   });
@@ -161,6 +161,7 @@ describe("SettingsView", () => {
         onAccentColorChange={() => undefined}
         onDelete={() => undefined}
         onClearBrowserData={() => undefined}
+        onOpenPrivacyPolicy={() => undefined}
         onOpenOfficialInformation={() => undefined}
       />,
     );
@@ -168,7 +169,9 @@ describe("SettingsView", () => {
     expect(markup).toContain("バージョン");
     expect(markup).toContain("1.0.1");
     expect(markup).toContain("非公式アプリ");
-    expect(markup).toContain("Stashly for BOOTHのサポート窓口ではありません");
+    expect(markup).toContain("Stashlyのサポート窓口ではありません");
+    expect(markup).toContain("Stashlyのプライバシー");
+    expect(markup).toContain("プライバシーポリシーを表示");
     expect(markup).toContain(`href="${OFFICIAL_TERMS_URL}"`);
     expect(markup).toContain(`href="${OFFICIAL_PRIVACY_URL}"`);
     expect(markup).not.toContain("BOOTH公式サポート");

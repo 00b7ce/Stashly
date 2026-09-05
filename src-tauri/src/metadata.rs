@@ -22,9 +22,9 @@ const MINIMUM_REQUEST_INTERVAL_SECONDS: i64 = 10;
 const DEFAULT_RATE_LIMIT_PAUSE_SECONDS: i64 = 24 * 60 * 60;
 const MAX_HTML_BYTES: usize = 1024 * 1024;
 const METADATA_USER_AGENT: &str = concat!(
-    "StashlyForBOOTH/",
+    "Stashly/",
     env!("CARGO_PKG_VERSION"),
-    " (+https://github.com/00b7ce/stashly-for-booth)"
+    " (+https://github.com/00b7ce/Stashly)"
 );
 
 const FETCH_POLICY: MetadataFetchPolicy = MetadataFetchPolicy {

@@ -1,17 +1,20 @@
-# Stashly for BOOTH project instructions
+# Stashly project instructions
 
 ## Purpose
 
-Stashly for BOOTH is an unofficial Windows desktop library manager for files downloaded from BOOTH. It uses a dedicated, unprivileged BOOTH WebView and stores library metadata in its own SQLite database. It must not modify BOOTH Library Manager files, its SQLite database, or the global `booth-library-manager://` protocol registration.
+Stashly is an unofficial Windows desktop library manager for files downloaded from BOOTH. It uses a dedicated, unprivileged BOOTH WebView and stores library metadata in its own SQLite database. It must not modify BOOTH Library Manager files, its SQLite database, or the global `booth-library-manager://` protocol registration.
 
 ## Architecture
 
 - `src/`: React and TypeScript local management UI.
 - `src-tauri/src/`: Rust application core, WebView policy, native WebView downloads, SQLite storage, and post-processing.
+- `PRIVACY.md`: bundled privacy policy shown by the first-run consent gate and Settings dialog.
 - `docs/architecture.md`: trust boundaries and data flow.
 - `docs/development.md`: setup and verification commands.
 
 The local `main` WebView may invoke explicitly exposed Tauri commands. The remote `booth-browser` WebView must never receive local filesystem, shell, opener, dialog, or custom-command capabilities.
+
+The main React application must not mount before the user has accepted the exact current `PRIVACY.md` document version. A policy version change must require consent again, and Settings must render the same bundled Markdown document rather than a duplicate copy.
 
 ## Development commands
 

@@ -11,19 +11,19 @@ const bridgeSource = bridgeFile
   )
   .replace(
     "window.location.assign(pending.href)",
-    "window.__boothShelfTestNavigation = pending.href",
+    "window.__stashlyTestNavigation = pending.href",
   )
   .replace(
     "window.location.assign(product.href)",
-    "window.__boothShelfTestNavigation = product.href",
+    "window.__stashlyTestNavigation = product.href",
   )
   .replace(
-    "window.location.assign(`booth-shelf://download-intent?${query}`);",
-    "window.__boothShelfTestNavigation = `booth-shelf://download-intent?${query}`;",
+    "window.location.assign(`stashly://download-intent?${query}`);",
+    "window.__stashlyTestNavigation = `stashly://download-intent?${query}`;",
   )
   .replace(
     'document.addEventListener("click", (event) => {',
-    'document.addEventListener("click", window.__boothShelfTestClickHandler = (event) => {',
+    'document.addEventListener("click", window.__stashlyTestClickHandler = (event) => {',
   )
   .replace(
     `      new MutationObserver(scheduleEnhance).observe(document.documentElement, {
@@ -73,15 +73,15 @@ function renderProduct() {
 describe("BOOTH download bridge", () => {
   beforeEach(() => {
     const bridgeWindow = window as unknown as Record<string, unknown>;
-    const previousClickHandler = bridgeWindow.__boothShelfTestClickHandler as
+    const previousClickHandler = bridgeWindow.__stashlyTestClickHandler as
       | EventListener
       | undefined;
     if (previousClickHandler) {
       document.removeEventListener("click", previousClickHandler, true);
     }
     window.history.replaceState({}, "", "/library");
-    delete bridgeWindow.__boothShelfDownloadBridgeInstalled;
-    delete bridgeWindow.__boothShelfTestClickHandler;
+    delete bridgeWindow.__stashlyDownloadBridgeInstalled;
+    delete bridgeWindow.__stashlyTestClickHandler;
     window.requestAnimationFrame = (callback) => {
       callback(0);
       return 1;
@@ -90,19 +90,19 @@ describe("BOOTH download bridge", () => {
       configurable: true,
       value: () => "00000000-0000-4000-8000-000000000001",
     });
-    delete bridgeWindow.__boothShelfTestNavigation;
+    delete bridgeWindow.__stashlyTestNavigation;
   });
 
   it("hides the paired alternative only with complete official download context", () => {
     const alternative = renderLibrary();
 
-    expect(alternative?.classList.contains("booth-shelf-hidden-download-option")).toBe(true);
+    expect(alternative?.classList.contains("stashly-hidden-download-option")).toBe(true);
   });
 
   it("leaves the alternative visible when the item ID cannot be proven", () => {
     const alternative = renderLibrary(false);
 
-    expect(alternative?.classList.contains("booth-shelf-hidden-download-option")).toBe(false);
+    expect(alternative?.classList.contains("stashly-hidden-download-option")).toBe(false);
   });
 
   it("arms a button-based download and shows its notification before following the official URL", () => {
@@ -115,23 +115,23 @@ describe("BOOTH download bridge", () => {
     button?.dispatchEvent(event);
 
     const bridgeWindow = window as unknown as Record<string, unknown>;
-    const intent = new URL(String(bridgeWindow.__boothShelfTestNavigation));
+    const intent = new URL(String(bridgeWindow.__stashlyTestNavigation));
     expect(event.defaultPrevented).toBe(true);
-    expect(intent.protocol).toBe("booth-shelf:");
+    expect(intent.protocol).toBe("stashly:");
     expect(intent.hostname).toBe("download-intent");
     expect(intent.searchParams.get("variation_id")).toBe("789");
     expect(intent.searchParams.get("downloadable_id")).toBe("789");
 
-    const accept = bridgeWindow.__boothShelfAcceptDownloadIntent as (requestId: string) => void;
+    const accept = bridgeWindow.__stashlyAcceptDownloadIntent as (requestId: string) => void;
     accept(String(intent.searchParams.get("request_id")));
 
-    expect(bridgeWindow.__boothShelfTestNavigation).toBe(
+    expect(bridgeWindow.__stashlyTestNavigation).toBe(
       "https://booth.pm/downloadables/789",
     );
-    const notificationHost = document.getElementById("booth-shelf-download-notifications");
+    const notificationHost = document.getElementById("stashly-download-notifications");
     expect(notificationHost?.parentElement).toBe(document.body);
     expect(notificationHost?.textContent).toContain("ダウンロード中");
-    expect(notificationHost?.querySelector(".booth-shelf-notification-icon")?.textContent).toBe("");
+    expect(notificationHost?.querySelector(".stashly-notification-icon")?.textContent).toBe("");
   });
 
   it("arms a free download from an exact BOOTH product page", () => {
@@ -141,18 +141,18 @@ describe("BOOTH download bridge", () => {
     link?.dispatchEvent(event);
 
     const bridgeWindow = window as unknown as Record<string, unknown>;
-    const intent = new URL(String(bridgeWindow.__boothShelfTestNavigation));
+    const intent = new URL(String(bridgeWindow.__stashlyTestNavigation));
     expect(event.defaultPrevented).toBe(true);
-    expect(intent.protocol).toBe("booth-shelf:");
+    expect(intent.protocol).toBe("stashly:");
     expect(intent.hostname).toBe("download-intent");
     expect(intent.searchParams.get("item_id")).toBe("12345");
     expect(intent.searchParams.get("variation_id")).toBe("14512796");
     expect(intent.searchParams.get("downloadable_id")).toBe("9413860");
 
-    const accept = bridgeWindow.__boothShelfAcceptDownloadIntent as (requestId: string) => void;
+    const accept = bridgeWindow.__stashlyAcceptDownloadIntent as (requestId: string) => void;
     accept(String(intent.searchParams.get("request_id")));
 
-    expect(bridgeWindow.__boothShelfTestNavigation).toBe(
+    expect(bridgeWindow.__stashlyTestNavigation).toBe(
       "https://booth.pm/downloadables/9413860?variation_id=14512796",
     );
   });
@@ -175,7 +175,7 @@ describe("BOOTH download bridge", () => {
     document.querySelector<HTMLAnchorElement>('a[href*="/downloadables/"]')?.dispatchEvent(event);
 
     const bridgeWindow = window as unknown as Record<string, unknown>;
-    const intent = new URL(String(bridgeWindow.__boothShelfTestNavigation));
+    const intent = new URL(String(bridgeWindow.__stashlyTestNavigation));
     expect(event.defaultPrevented).toBe(true);
     expect(intent.searchParams.get("item_id")).toBe("3813504");
     expect(intent.searchParams.get("variation_id")).toBe("6359201");
@@ -197,7 +197,7 @@ describe("BOOTH download bridge", () => {
     document.querySelector("a")?.dispatchEvent(event);
 
     const bridgeWindow = window as unknown as Record<string, unknown>;
-    const intent = new URL(String(bridgeWindow.__boothShelfTestNavigation));
+    const intent = new URL(String(bridgeWindow.__stashlyTestNavigation));
     expect(event.defaultPrevented).toBe(true);
     expect(intent.searchParams.get("item_id")).toBe("3813504");
   });
@@ -212,7 +212,7 @@ describe("BOOTH download bridge", () => {
 
     const bridgeWindow = window as unknown as Record<string, unknown>;
     expect(event.defaultPrevented).toBe(true);
-    expect(bridgeWindow.__boothShelfTestNavigation).toBe(
+    expect(bridgeWindow.__stashlyTestNavigation).toBe(
       "https://sample-shop.booth.pm/items/12345",
     );
   });
@@ -233,7 +233,7 @@ describe("BOOTH download bridge", () => {
 
     const bridgeWindow = window as unknown as Record<string, unknown>;
     expect(linkHandledNormally).toBe(true);
-    expect(bridgeWindow.__boothShelfTestNavigation).toBeUndefined();
+    expect(bridgeWindow.__stashlyTestNavigation).toBeUndefined();
   });
 
   it("does not arm a download outside an exact BOOTH product page", () => {
@@ -256,6 +256,6 @@ describe("BOOTH download bridge", () => {
 
     const bridgeWindow = window as unknown as Record<string, unknown>;
     expect(linkHandledNormally).toBe(true);
-    expect(bridgeWindow.__boothShelfTestNavigation).toBeUndefined();
+    expect(bridgeWindow.__stashlyTestNavigation).toBeUndefined();
   });
 });

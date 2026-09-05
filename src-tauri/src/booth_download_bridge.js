@@ -3,19 +3,19 @@
 
   const BOOTH_LIBRARY_ORIGIN = "https://accounts.booth.pm";
   const BOOTH_DOWNLOAD_ORIGIN = "https://booth.pm";
-  const NOTIFICATION_HOST_ID = "booth-shelf-download-notifications";
-  const NOTIFICATION_STYLE_ID = "booth-shelf-download-notification-style";
+  const NOTIFICATION_HOST_ID = "stashly-download-notifications";
+  const NOTIFICATION_STYLE_ID = "stashly-download-notification-style";
   const NOTIFICATION_DURATION_MS = 6000;
   const DOWNLOAD_LABEL = "ダウンロード";
   const ALTERNATIVE_LABEL = "その他のDL方法";
-  const HIDDEN_CLASS = "booth-shelf-hidden-download-option";
-  const HIDDEN_CHROME_CLASS = "booth-shelf-hidden-library-chrome";
-  const LIBRARY_MAIN_ATTRIBUTE = "data-booth-shelf-library-main";
+  const HIDDEN_CLASS = "stashly-hidden-download-option";
+  const HIDDEN_CHROME_CLASS = "stashly-hidden-library-chrome";
+  const LIBRARY_MAIN_ATTRIBUTE = "data-stashly-library-main";
   const LIBRARY_TAB_LABELS = ["購入した商品", "ギフト", "無料ダウンロード"];
   const INTENT_TIMEOUT_MS = 3000;
 
-  if (window.__boothShelfDownloadBridgeInstalled) return;
-  window.__boothShelfDownloadBridgeInstalled = true;
+  if (window.__stashlyDownloadBridgeInstalled) return;
+  window.__stashlyDownloadBridgeInstalled = true;
 
   const notificationTimers = new Map();
   const ensureNotificationHost = () => {
@@ -29,7 +29,7 @@
           width: min(460px, calc(100vw - 48px)); display: grid; gap: 10px;
           font-family: Inter, "Yu Gothic UI", system-ui, sans-serif;
         }
-        #${NOTIFICATION_HOST_ID} .booth-shelf-notification {
+        #${NOTIFICATION_HOST_ID} .stashly-notification {
           position: relative; min-height: 78px; padding: 16px 14px 17px 16px;
           display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 13px;
           align-items: center; overflow: hidden; border: 1px solid #dbe1eb;
@@ -37,22 +37,22 @@
           backdrop-filter: blur(12px); color: #687287;
           transition: transform 160ms ease, box-shadow 160ms ease;
         }
-        #${NOTIFICATION_HOST_ID} .booth-shelf-notification.completed { color: #2d8a6a; }
-        #${NOTIFICATION_HOST_ID} .booth-shelf-notification.failed { color: #b43d57; }
-        #${NOTIFICATION_HOST_ID} .booth-shelf-notification.completed[data-request-id] { cursor: pointer; }
-        #${NOTIFICATION_HOST_ID} .booth-shelf-notification.completed[data-request-id]:hover {
+        #${NOTIFICATION_HOST_ID} .stashly-notification.completed { color: #2d8a6a; }
+        #${NOTIFICATION_HOST_ID} .stashly-notification.failed { color: #b43d57; }
+        #${NOTIFICATION_HOST_ID} .stashly-notification.completed[data-request-id] { cursor: pointer; }
+        #${NOTIFICATION_HOST_ID} .stashly-notification.completed[data-request-id]:hover {
           transform: translateY(-2px); box-shadow: 0 12px 34px #25304730;
         }
-        #${NOTIFICATION_HOST_ID} .booth-shelf-notification-icon {
+        #${NOTIFICATION_HOST_ID} .stashly-notification-icon {
           width: 24px; height: 24px; display: grid; place-items: center;
           font-size: 20px; font-weight: 800;
         }
-        #${NOTIFICATION_HOST_ID} .booth-shelf-notification:not(.completed):not(.failed)
-          .booth-shelf-notification-icon::before {
+        #${NOTIFICATION_HOST_ID} .stashly-notification:not(.completed):not(.failed)
+          .stashly-notification-icon::before {
             content: ""; width: 18px; height: 18px; box-sizing: border-box;
             border: 2px solid #dbe1eb; border-top-color: currentColor;
             border-radius: 50%; transform-origin: center;
-            animation: booth-shelf-spin 1s linear infinite;
+            animation: stashly-spin 1s linear infinite;
           }
         #${NOTIFICATION_HOST_ID} strong, #${NOTIFICATION_HOST_ID} span {
           display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -64,19 +64,19 @@
           border-radius: 7px; background: transparent; color: #8b95a8; cursor: pointer;
         }
         #${NOTIFICATION_HOST_ID} button:hover { background: #edf0f5; color: #394357; }
-        #${NOTIFICATION_HOST_ID} .booth-shelf-notification-expiry {
+        #${NOTIFICATION_HOST_ID} .stashly-notification-expiry {
           position: absolute; right: 0; bottom: 0; left: 0; height: 4px; background: #e6ebf2;
         }
-        #${NOTIFICATION_HOST_ID} .booth-shelf-notification.completed
-          .booth-shelf-notification-expiry::after {
+        #${NOTIFICATION_HOST_ID} .stashly-notification.completed
+          .stashly-notification-expiry::after {
           content: ""; position: absolute; inset: 0; background: #43a985;
           transform-origin: left center;
-          animation: booth-shelf-expiry ${NOTIFICATION_DURATION_MS}ms linear forwards;
+          animation: stashly-expiry ${NOTIFICATION_DURATION_MS}ms linear forwards;
         }
-        #${NOTIFICATION_HOST_ID} .booth-shelf-notification:not(.completed)
-          .booth-shelf-notification-expiry { display: none; }
-        @keyframes booth-shelf-spin { to { transform: rotate(360deg); } }
-        @keyframes booth-shelf-expiry { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+        #${NOTIFICATION_HOST_ID} .stashly-notification:not(.completed)
+          .stashly-notification-expiry { display: none; }
+        @keyframes stashly-spin { to { transform: rotate(360deg); } }
+        @keyframes stashly-expiry { from { transform: scaleX(1); } to { transform: scaleX(0); } }
       `;
       (document.head || document.documentElement).appendChild(style);
     }
@@ -90,7 +90,7 @@
     return host;
   };
 
-  window.__boothShelfNotify = (status) => {
+  window.__stashlyNotify = (status) => {
     if (!status || typeof status !== "object") return;
     const host = ensureNotificationHost();
     if (!host) return;
@@ -100,15 +100,15 @@
       row = document.createElement("div");
       row.dataset.notificationKey = key;
       row.innerHTML = `
-        <div class="booth-shelf-notification-icon" aria-hidden="true"></div>
+        <div class="stashly-notification-icon" aria-hidden="true"></div>
         <div><strong></strong><span></span></div>
         <button type="button" aria-label="通知を閉じる">×</button>
-        <div class="booth-shelf-notification-expiry" aria-hidden="true"></div>
+        <div class="stashly-notification-expiry" aria-hidden="true"></div>
       `;
       const openCompletedFolder = () => {
         const requestId = row.dataset.requestId;
         if (!requestId || !row.classList.contains("completed")) return;
-        window.location.href = `booth-shelf://open-product-folder?request_id=${encodeURIComponent(requestId)}`;
+        window.location.href = `stashly://open-product-folder?request_id=${encodeURIComponent(requestId)}`;
       };
       row.addEventListener("click", openCompletedFolder);
       row.addEventListener("keydown", (event) => {
@@ -122,13 +122,13 @@
       });
       host.prepend(row);
     }
-    row.className = `booth-shelf-notification ${String(status.state || "")}`;
-    row.querySelector(".booth-shelf-notification-icon").textContent =
+    row.className = `stashly-notification ${String(status.state || "")}`;
+    row.querySelector(".stashly-notification-icon").textContent =
       status.state === "completed" ? "✓" : status.state === "failed" ? "!" : "";
     const copy = status.state === "completed"
       ? ["ダウンロード完了", "ダウンロードが完了しました。"]
       : status.state === "failed"
-        ? ["ダウンロード失敗", "詳細はStashly for BOOTHを確認してください。"]
+        ? ["ダウンロード失敗", "詳細はStashlyを確認してください。"]
         : status.state === "downloading"
           ? ["ダウンロード中", "ダウンロードしています。"]
           : ["ダウンロード受付", "ダウンロードを受け付けました。"];
@@ -315,20 +315,20 @@
     if (!pending) return;
     window.clearTimeout(pending.timer);
     pendingIntents.delete(requestId);
-    window.__boothShelfNotify({ requestId, state: "failed" });
+    window.__stashlyNotify({ requestId, state: "failed" });
   };
-  window.__boothShelfAcceptDownloadIntent = (requestId) => {
+  window.__stashlyAcceptDownloadIntent = (requestId) => {
     const key = String(requestId);
     const pending = pendingIntents.get(key);
     if (!pending) return;
     window.clearTimeout(pending.timer);
     pendingIntents.delete(key);
-    window.__boothShelfNotify({ requestId: key, state: "downloading" });
+    window.__stashlyNotify({ requestId: key, state: "downloading" });
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => window.location.assign(pending.href));
     });
   };
-  window.__boothShelfRejectDownloadIntent = (requestId) => rejectIntent(String(requestId));
+  window.__stashlyRejectDownloadIntent = (requestId) => rejectIntent(String(requestId));
   const registerDownloadIntent = (download, itemId) => {
     const requestId = crypto.randomUUID();
     const timer = window.setTimeout(() => rejectIntent(requestId), INTENT_TIMEOUT_MS);
@@ -339,7 +339,7 @@
       variation_id: String(download.variationId),
       downloadable_id: String(download.downloadableId),
     });
-    window.location.assign(`booth-shelf://download-intent?${query}`);
+    window.location.assign(`stashly://download-intent?${query}`);
   };
 
   const start = () => {
@@ -372,7 +372,7 @@
           contextByDownload.get(downloadKey(download)) ||
           (link && findItemId(link));
         if (!itemId) {
-          window.__boothShelfNotify({ requestId: crypto.randomUUID(), state: "failed" });
+          window.__stashlyNotify({ requestId: crypto.randomUUID(), state: "failed" });
           return;
         }
         registerDownloadIntent(download, itemId);

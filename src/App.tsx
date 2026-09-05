@@ -30,6 +30,7 @@ import {
   RefreshCw,
   Search,
   Settings2,
+  ShieldCheck,
   ShoppingBag,
   Sun,
   Trash2,
@@ -46,6 +47,7 @@ import {
   type LibraryStorageSummary,
   type Product,
 } from "./library";
+import { PrivacyPolicyDialog } from "./privacy";
 
 const EMPTY_LIBRARY: LibrarySnapshot = {
   products: [],
@@ -65,10 +67,10 @@ export type LibraryViewMode = "large" | "medium" | "small" | "list";
 export type BrowserNavigationAction = "back" | "forward" | "reload";
 export type ThemeMode = "system" | "light" | "dark";
 
-const LIBRARY_VIEW_STORAGE_KEY = "booth-shelf-library-view";
-const SIDEBAR_COLLAPSED_STORAGE_KEY = "booth-shelf-sidebar-collapsed";
-const THEME_MODE_STORAGE_KEY = "booth-shelf-theme-mode";
-const ACCENT_COLOR_STORAGE_KEY = "booth-shelf-accent-color";
+const LIBRARY_VIEW_STORAGE_KEY = "stashly-library-view";
+const SIDEBAR_COLLAPSED_STORAGE_KEY = "stashly-sidebar-collapsed";
+const THEME_MODE_STORAGE_KEY = "stashly-theme-mode";
+const ACCENT_COLOR_STORAGE_KEY = "stashly-accent-color";
 
 export function browserViewForUrl(value: string): Extract<ActiveView, "booth" | "booth-library"> | null {
   let url: URL;
@@ -198,6 +200,7 @@ export function App() {
   const [clearingBrowserData, setClearingBrowserData] = useState(false);
   const [browserDataConfirmationOpen, setBrowserDataConfirmationOpen] = useState(false);
   const [browserDataMessage, setBrowserDataMessage] = useState<string | null>(null);
+  const [privacyPolicyOpen, setPrivacyPolicyOpen] = useState(false);
   const [pendingLibraryRoot, setPendingLibraryRoot] = useState<LibraryRootCandidate | null>(null);
   const [savingLibraryRoot, setSavingLibraryRoot] = useState(false);
   const [browserUrl, setBrowserUrl] = useState(BOOTH_TOP_URL);
@@ -501,7 +504,7 @@ export function App() {
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark"><Box size={22} strokeWidth={2.2} /></div>
-          <div className="brand-copy"><strong>Stashly <span>for BOOTH</span></strong><small>Local asset library</small></div>
+          <div className="brand-copy"><strong>Stashly</strong><small>Local asset library</small></div>
         </div>
 
         <nav className="nav-list" aria-label="メインナビゲーション">
@@ -591,6 +594,7 @@ export function App() {
             onAccentColorChange={changeAccentColor}
             onDelete={requestDeleteAllDownloads}
             onClearBrowserData={requestClearBrowserData}
+            onOpenPrivacyPolicy={() => setPrivacyPolicyOpen(true)}
             onOpenOfficialInformation={openOfficialInformation}
           />
         ) : activeView === "library" ? (
@@ -676,6 +680,10 @@ export function App() {
             onCancel={() => setPendingLibraryRoot(null)}
             onConfirm={() => void saveLibraryRoot(pendingLibraryRoot.path, true)}
           />
+        )}
+
+        {privacyPolicyOpen && (
+          <PrivacyPolicyDialog onClose={() => setPrivacyPolicyOpen(false)} />
         )}
       </main>
     </div>
@@ -870,7 +878,7 @@ export function DeleteConfirmationDialog({ libraryRoot, onCancel, onConfirm }: {
         <p className="eyebrow">DESTRUCTIVE ACTION</p>
         <h2 id="delete-dialog-title">ダウンロード済みファイルを削除しますか？</h2>
         <p id="delete-dialog-description">
-          Stashly for BOOTHが記録しているファイルと展開フォルダをすべて削除します。この操作は元に戻せません。管理対象外のファイルは削除しません。
+          Stashlyが記録しているファイルと展開フォルダをすべて削除します。この操作は元に戻せません。管理対象外のファイルは削除しません。
         </p>
         <div className="confirmation-path"><span>保存先</span><code>{libraryRoot}</code></div>
       </div>
@@ -907,7 +915,7 @@ export function BrowserDataConfirmationDialog({ onCancel, onConfirm }: {
         <p className="eyebrow">PRIVACY DATA</p>
         <h2 id="browser-data-dialog-title">BOOTHブラウザーの個人データを削除しますか？</h2>
         <p id="browser-data-dialog-description">
-          専用WebViewに保存されたCookie、キャッシュ、閲覧履歴、ローカルストレージなどを削除します。BOOTHとpixivからログアウトします。ダウンロード済みファイルとStashly for BOOTHのライブラリ登録は削除しません。
+          専用WebViewに保存されたCookie、キャッシュ、閲覧履歴、ローカルストレージなどを削除します。BOOTHとpixivからログアウトします。ダウンロード済みファイルとStashlyのライブラリ登録は削除しません。
         </p>
       </div>
       <div className="confirmation-actions">
@@ -982,7 +990,7 @@ export function LibraryRootConfirmationDialog({ candidate, saving, onCancel, onC
   </div>;
 }
 
-export function SettingsView({ appVersion, libraryRoot, libraryStorage, themeMode, accentColor, deleting, cleanupMessage, clearingBrowserData, browserDataMessage, onChooseRoot, onThemeChange, onAccentColorChange, onDelete, onClearBrowserData, onOpenOfficialInformation }: {
+export function SettingsView({ appVersion, libraryRoot, libraryStorage, themeMode, accentColor, deleting, cleanupMessage, clearingBrowserData, browserDataMessage, onChooseRoot, onThemeChange, onAccentColorChange, onDelete, onClearBrowserData, onOpenPrivacyPolicy, onOpenOfficialInformation }: {
   appVersion: string;
   libraryRoot: string | null;
   libraryStorage: LibraryStorageSummary | null;
@@ -997,6 +1005,7 @@ export function SettingsView({ appVersion, libraryRoot, libraryStorage, themeMod
   onAccentColorChange: (color: string) => void;
   onDelete: () => void;
   onClearBrowserData: () => void;
+  onOpenPrivacyPolicy: () => void;
   onOpenOfficialInformation: (url: OfficialInformationUrl) => void;
 }) {
   return <section className="settings-layout" aria-label="設定">
@@ -1004,7 +1013,7 @@ export function SettingsView({ appVersion, libraryRoot, libraryStorage, themeMod
       <div className="settings-icon"><Moon size={22} /></div>
       <div className="settings-body">
         <h2>外観</h2>
-        <p>Stashly for BOOTHの表示テーマを選択します。BOOTHサイトには適用されません。</p>
+        <p>Stashlyの表示テーマを選択します。BOOTHサイトには適用されません。</p>
         <ThemePicker value={themeMode} onChange={onThemeChange} />
         <div className="appearance-divider" />
         <div className="appearance-subheading"><Palette size={17} /><h3>アクセントカラー</h3></div>
@@ -1032,18 +1041,29 @@ export function SettingsView({ appVersion, libraryRoot, libraryStorage, themeMod
       </div>
     </article>
 
+    <article className="settings-card">
+      <div className="settings-icon"><ShieldCheck size={22} /></div>
+      <div className="settings-body">
+        <h2>Stashlyのプライバシー</h2>
+        <p>初回起動時に同意したStashlyのプライバシーポリシーを確認できます。</p>
+        <button className="secondary-button" type="button" onClick={onOpenPrivacyPolicy}>
+          <ShieldCheck size={17} />プライバシーポリシーを表示
+        </button>
+      </div>
+    </article>
+
     <article className="settings-card about-card">
       <div className="settings-icon"><Info size={22} /></div>
       <div className="settings-body">
         <h2>このアプリについて</h2>
-        <p>Stashly for BOOTHはピクシブ株式会社、BOOTH、pixivとは提携・承認・協賛関係のない非公式アプリです。</p>
+        <p>Stashlyはピクシブ株式会社、BOOTH、pixivとは提携・承認・協賛関係のない非公式アプリです。</p>
         <dl className="version-information">
           <dt>バージョン</dt>
           <dd>{appVersion}</dd>
         </dl>
         <div className="official-information">
           <h3>BOOTH・pixiv公式情報（外部サイト）</h3>
-          <p>以下はBOOTH・pixivの公式文書です。Stashly for BOOTHのサポート窓口ではありません。</p>
+          <p>以下はBOOTH・pixivの公式文書です。Stashlyのサポート窓口ではありません。</p>
           <nav aria-label="BOOTH・pixiv公式情報">
             <a href={OFFICIAL_TERMS_URL} onClick={(event) => { event.preventDefault(); onOpenOfficialInformation(OFFICIAL_TERMS_URL); }}>
               <span><strong>サービス利用規約</strong><small>booth.pm</small></span><ExternalLink size={16} />
@@ -1073,7 +1093,7 @@ export function SettingsView({ appVersion, libraryRoot, libraryStorage, themeMod
       <div className="settings-icon danger-icon"><Trash2 size={22} /></div>
       <div className="settings-body">
         <h2>データの削除</h2>
-        <p>Stashly for BOOTHがDBに記録したダウンロード済みファイル・展開フォルダとライブラリ登録を削除します。保存先そのものや、管理対象外のファイルは残します。</p>
+        <p>StashlyがDBに記録したダウンロード済みファイル・展開フォルダとライブラリ登録を削除します。保存先そのものや、管理対象外のファイルは残します。</p>
         {cleanupMessage && <div className="success-banner"><CheckCircle2 size={17} />{cleanupMessage}</div>}
         <button className="danger-button" onClick={onDelete} disabled={!libraryRoot || deleting}>
           {deleting ? <LoaderCircle size={17} className="spin" /> : <Trash2 size={17} />}
