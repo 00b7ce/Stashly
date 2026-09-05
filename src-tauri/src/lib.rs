@@ -56,6 +56,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_library,
+            commands::refresh_product_metadata,
             commands::set_library_root,
             commands::open_booth_browser,
             commands::hide_booth_browser,

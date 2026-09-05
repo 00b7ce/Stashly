@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AccentColorPicker,
   ActivityPanel,
@@ -21,6 +21,8 @@ import {
   normalizeAccentColor,
 } from "./App";
 import type { DownloadStatus, Product } from "./library";
+
+afterEach(cleanup);
 
 const product: Product = {
   itemId: 12345,
@@ -42,12 +44,52 @@ describe("ProductCard", () => {
         product={product}
         onError={() => undefined}
         onOpenProduct={() => undefined}
+        onRefreshMetadata={async () => undefined}
       />,
     );
 
     expect(markup.match(/<button/g)).toHaveLength(2);
     expect(markup).toContain("フォルダを開く");
     expect(markup).toContain("BOOTH");
+  });
+
+  it("opens a context menu with folder and per-product metadata actions", async () => {
+    const onRefreshMetadata = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ProductCard
+        product={product}
+        onError={() => undefined}
+        onOpenProduct={() => undefined}
+        onRefreshMetadata={onRefreshMetadata}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("article"), { clientX: 120, clientY: 80 });
+    const menu = screen.getByRole("menu", { name: "Sample product の操作" });
+    expect(menu.textContent).toContain("フォルダを開く");
+    fireEvent.click(screen.getByRole("menuitem", { name: "商品情報を再取得" }));
+
+    await waitFor(() => expect(onRefreshMetadata).toHaveBeenCalledWith(12345));
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("opens from the keyboard and returns focus with Escape", () => {
+    render(
+      <ProductCard
+        product={product}
+        onError={() => undefined}
+        onOpenProduct={() => undefined}
+        onRefreshMetadata={async () => undefined}
+      />,
+    );
+
+    const card = screen.getByRole("article");
+    card.focus();
+    fireEvent.keyDown(card, { key: "F10", shiftKey: true });
+    expect(screen.getByRole("menu")).toBeTruthy();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(card);
   });
 });
 

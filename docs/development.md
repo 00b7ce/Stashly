@@ -71,6 +71,7 @@ For a manual download test, use a free item already present in the user's accoun
 - changing to a different root is rejected while downloads/cleanup are active or while indexed artifacts would be orphaned;
 - a second download of the same product within 30 days reuses SQLite Open Graph metadata without another product-page request;
 - failed metadata requests are not retried for 24 hours, requests for different products remain at least ten seconds apart, and a simulated `429` persists a global pause across database reopen;
+- every local product card opens a two-action context menu for its saved folder and an explicit metadata refresh; manual refresh bypasses the selected product's cache/cooldown but still enforces the global request interval and persisted `429` pause;
 - metadata requests use the documented Stashly User-Agent and reject redirects outside exact public BOOTH product URLs, non-HTML responses, oversized HTML heads, and non-BOOTH image hosts;
 - metadata refresh failure does not prevent the downloaded artifact from being finalized;
 - Settings shows the packaged application version and an explicit nonofficial notice; the terms and privacy links open the expected official pages in the system browser under a separate official-information heading, with no BOOTH support link presented as the app's support contact;

@@ -1,6 +1,7 @@
 fn main() {
     let manifest = tauri_build::AppManifest::new().commands(&[
         "get_library",
+        "refresh_product_metadata",
         "set_library_root",
         "open_booth_browser",
         "hide_booth_browser",

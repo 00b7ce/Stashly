@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -168,6 +169,11 @@ type DeleteLibraryResult = {
   removedPaths: number;
 };
 
+type MetadataFeedback = {
+  kind: "success" | "error";
+  message: string;
+};
+
 export type LibraryRootCandidate = {
   path: string;
   kind: Exclude<LibraryStorageKind, "local">;
@@ -205,9 +211,11 @@ export function App() {
   const [savingLibraryRoot, setSavingLibraryRoot] = useState(false);
   const [browserUrl, setBrowserUrl] = useState(BOOTH_TOP_URL);
   const [appVersion, setAppVersion] = useState("取得中…");
+  const [metadataFeedback, setMetadataFeedback] = useState<MetadataFeedback | null>(null);
   const contentRef = useRef<HTMLElement>(null);
   const browserViewportRef = useRef<HTMLDivElement>(null);
   const notificationTimers = useRef(new Map<string, number>());
+  const metadataFeedbackTimer = useRef<number | null>(null);
   const browserViewActive =
     activeView === "booth" || activeView === "booth-library";
   const effectiveTheme = themeMode === "system"
@@ -308,6 +316,40 @@ export function App() {
       setError(errorText(reason)),
     );
   }, []);
+
+  const showMetadataFeedback = useCallback((feedback: MetadataFeedback) => {
+    if (metadataFeedbackTimer.current !== null) {
+      window.clearTimeout(metadataFeedbackTimer.current);
+    }
+    setMetadataFeedback(feedback);
+    metadataFeedbackTimer.current = window.setTimeout(() => {
+      setMetadataFeedback(null);
+      metadataFeedbackTimer.current = null;
+    }, 5_000);
+  }, []);
+
+  useEffect(() => () => {
+    if (metadataFeedbackTimer.current !== null) {
+      window.clearTimeout(metadataFeedbackTimer.current);
+    }
+  }, []);
+
+  const refreshProductMetadata = useCallback(async (itemId: number) => {
+    try {
+      const snapshot = await invoke<LibrarySnapshot>("refresh_product_metadata", { itemId });
+      setLibrary(snapshot);
+      setError(null);
+      const updated = snapshot.products.find((product) => product.itemId === itemId);
+      showMetadataFeedback({
+        kind: "success",
+        message: `${updated?.name ?? `商品 #${itemId}`}の商品情報を更新しました。`,
+      });
+    } catch (reason) {
+      const message = errorText(reason);
+      setError(message);
+      showMetadataFeedback({ kind: "error", message });
+    }
+  }, [showMetadataFeedback]);
 
   const changeLibraryView = useCallback((view: LibraryViewMode) => {
     setLibraryView(view);
@@ -643,6 +685,7 @@ export function App() {
                     product={product}
                     onError={setError}
                     onOpenProduct={(url) => void openBooth("booth", url)}
+                    onRefreshMetadata={refreshProductMetadata}
                   />
                 ))}
               </section>
@@ -656,6 +699,18 @@ export function App() {
             onDismiss={dismissActivity}
             onOpenFolder={openActivityFolder}
           />
+        )}
+
+        {metadataFeedback && (
+          <div
+            className={`metadata-feedback ${metadataFeedback.kind}`}
+            role={metadataFeedback.kind === "error" ? "alert" : "status"}
+          >
+            {metadataFeedback.kind === "success"
+              ? <CheckCircle2 size={18} />
+              : <TriangleAlert size={18} />}
+            <span>{metadataFeedback.message}</span>
+          </div>
         )}
 
         {deleteConfirmationOpen && library.libraryRoot && (
@@ -1113,14 +1168,140 @@ function EmptyState({ icon, title, detail, action, onAction }: {
   </section>;
 }
 
-export function ProductCard({ product, onError, onOpenProduct }: {
+type ContextMenuPosition = { x: number; y: number };
+
+export function ProductCard({ product, onError, onOpenProduct, onRefreshMetadata }: {
   product: Product;
   onError: (error: string) => void;
   onOpenProduct: (url: string) => void;
+  onRefreshMetadata: (itemId: number) => Promise<void>;
 }) {
+  const [contextMenu, setContextMenu] = useState<ContextMenuPosition | null>(null);
+  const [refreshingMetadata, setRefreshingMetadata] = useState(false);
+  const cardRef = useRef<HTMLElement>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const menu = contextMenuRef.current;
+    menu?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus();
+
+    const closeOnPointerDown = (event: PointerEvent) => {
+      if (!contextMenuRef.current?.contains(event.target as Node)) setContextMenu(null);
+    };
+    const closeOnKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setContextMenu(null);
+        cardRef.current?.focus();
+        return;
+      }
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      const items = Array.from(
+        contextMenuRef.current?.querySelectorAll<HTMLButtonElement>(
+          '[role="menuitem"]:not(:disabled)',
+        ) ?? [],
+      );
+      if (items.length === 0) return;
+      event.preventDefault();
+      const current = items.indexOf(document.activeElement as HTMLButtonElement);
+      const offset = event.key === "ArrowDown" ? 1 : -1;
+      items[(current + offset + items.length) % items.length]?.focus();
+    };
+    const close = () => setContextMenu(null);
+    window.addEventListener("pointerdown", closeOnPointerDown);
+    window.addEventListener("keydown", closeOnKeyDown);
+    window.addEventListener("blur", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      window.removeEventListener("pointerdown", closeOnPointerDown);
+      window.removeEventListener("keydown", closeOnKeyDown);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [contextMenu]);
+
   const openFolder = () => invoke("open_product_folder", { itemId: product.itemId }).catch((reason) => onError(errorText(reason)));
-  return <article className="product-card" onContextMenu={(event) => { if (product.localPath) { event.preventDefault(); void openFolder(); } }}>
-    <div className="thumbnail" title={product.localPath ? "右クリックで保存フォルダを開く" : undefined}>
+  const refreshMetadata = async () => {
+    if (refreshingMetadata) return;
+    setRefreshingMetadata(true);
+    try {
+      await onRefreshMetadata(product.itemId);
+    } finally {
+      setRefreshingMetadata(false);
+    }
+  };
+  const showContextMenu = (requestedX: number, requestedY: number) => {
+    const margin = 8;
+    const menuWidth = 230;
+    const menuHeight = 92;
+    setContextMenu({
+      x: Math.max(margin, Math.min(requestedX, window.innerWidth - menuWidth - margin)),
+      y: Math.max(margin, Math.min(requestedY, window.innerHeight - menuHeight - margin)),
+    });
+  };
+  const openContextMenu = (event: React.MouseEvent<HTMLElement>) => {
+    event.preventDefault();
+    const bounds = event.currentTarget.getBoundingClientRect();
+    showContextMenu(event.clientX || bounds.left + 16, event.clientY || bounds.top + 16);
+  };
+  const openContextMenuFromKeyboard = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+    event.preventDefault();
+    const bounds = event.currentTarget.getBoundingClientRect();
+    showContextMenu(bounds.left + 16, bounds.top + 16);
+  };
+  const contextMenuPortal = contextMenu && typeof document !== "undefined"
+    ? createPortal(
+      <div
+        ref={contextMenuRef}
+        className="product-context-menu"
+        role="menu"
+        aria-label={`${product.name} の操作`}
+        style={{ left: contextMenu.x, top: contextMenu.y }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
+      >
+        <button
+          type="button"
+          role="menuitem"
+          disabled={!product.localPath}
+          onClick={() => {
+            setContextMenu(null);
+            cardRef.current?.focus();
+            void openFolder();
+          }}
+        >
+          <FolderOpen size={16} />フォルダを開く
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          disabled={refreshingMetadata}
+          onClick={() => {
+            setContextMenu(null);
+            cardRef.current?.focus();
+            void refreshMetadata();
+          }}
+        >
+          <RefreshCw size={16} className={refreshingMetadata ? "spin" : ""} />
+          {refreshingMetadata ? "商品情報を再取得中…" : "商品情報を再取得"}
+        </button>
+      </div>,
+      document.body,
+    )
+    : null;
+
+  return <article
+    ref={cardRef}
+    className="product-card"
+    tabIndex={0}
+    onContextMenu={openContextMenu}
+    onKeyDown={openContextMenuFromKeyboard}
+  >
+    <div className="thumbnail" title="右クリックでメニューを開く">
       {product.thumbnailUrl ? <img src={product.thumbnailUrl} alt="" /> : <Box size={34} />}
       <span className="file-count"><Download size={13} />{product.artifactCount}</span>
     </div>
@@ -1133,6 +1314,7 @@ export function ProductCard({ product, onError, onOpenProduct }: {
       <button onClick={() => void openFolder()} disabled={!product.localPath}><FolderOpen size={16} />フォルダを開く</button>
       <button onClick={() => onOpenProduct(product.productUrl)}><ExternalLink size={16} />BOOTH</button>
     </div>
+    {contextMenuPortal}
   </article>;
 }
 

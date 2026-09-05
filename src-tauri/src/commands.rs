@@ -8,6 +8,7 @@ use crate::{
     cleanup::DeleteLibraryResult,
     db::Database,
     error::{AppError, AppResult},
+    metadata,
     model::{LibrarySnapshot, SetLibraryRootResult},
     security::ensure_within_root,
     storage::{
@@ -38,6 +39,15 @@ pub async fn delete_downloaded_files(state: State<'_, AppState>) -> AppResult<De
 
 #[tauri::command]
 pub fn get_library(state: State<'_, AppState>) -> AppResult<LibrarySnapshot> {
+    library_snapshot(&state.database)
+}
+
+#[tauri::command]
+pub async fn refresh_product_metadata(
+    item_id: i64,
+    state: State<'_, AppState>,
+) -> AppResult<LibrarySnapshot> {
+    metadata::refresh_product_metadata(&state.database, item_id).await?;
     library_snapshot(&state.database)
 }
 

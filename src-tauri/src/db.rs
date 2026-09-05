@@ -79,10 +79,28 @@ pub struct MetadataFetchPolicy {
     pub minimum_interval_seconds: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetadataFetchMode {
+    Automatic,
+    Manual,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetadataFetchSkipReason {
+    CachedOrCoolingDown,
+    MinimumInterval,
+    Paused,
+}
+
 #[derive(Debug)]
 pub enum MetadataFetchReservation {
-    Fetch { stale: Option<UpsertProductInput> },
-    Skip { cached: Option<UpsertProductInput> },
+    Fetch {
+        stale: Option<UpsertProductInput>,
+    },
+    Skip {
+        cached: Option<UpsertProductInput>,
+        reason: MetadataFetchSkipReason,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -175,11 +193,22 @@ impl Database {
         Ok(count > 0)
     }
 
+    pub fn has_product(&self, item_id: i64) -> AppResult<bool> {
+        let connection = self.open()?;
+        let count = connection.query_row(
+            "SELECT COUNT(*) FROM products WHERE item_id = ?1",
+            [item_id],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(count > 0)
+    }
+
     pub fn reserve_product_metadata_fetch(
         &self,
         item_id: i64,
         now: i64,
         policy: MetadataFetchPolicy,
+        mode: MetadataFetchMode,
     ) -> AppResult<MetadataFetchReservation> {
         let mut connection = self.open()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -187,25 +216,33 @@ impl Database {
         let paused_until = setting_i64(&transaction, METADATA_PAUSED_UNTIL_KEY)?;
         if paused_until.is_some_and(|until| until > now) {
             transaction.commit()?;
-            return Ok(MetadataFetchReservation::Skip { cached });
+            return Ok(MetadataFetchReservation::Skip {
+                cached,
+                reason: MetadataFetchSkipReason::Paused,
+            });
         }
 
-        let fetch_times = transaction
-            .query_row(
-                "SELECT last_attempt_at, last_success_at FROM product_metadata_fetches WHERE item_id = ?1",
-                [item_id],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?)),
-            )
-            .optional()?;
-        if let Some((last_attempt, last_success)) = fetch_times {
-            let success_is_fresh = last_success.is_some_and(|last_success| {
-                elapsed_seconds(now, last_success) < policy.success_cache_seconds
-            });
-            let attempt_is_recent =
-                elapsed_seconds(now, last_attempt) < policy.failed_retry_seconds;
-            if success_is_fresh || attempt_is_recent {
-                transaction.commit()?;
-                return Ok(MetadataFetchReservation::Skip { cached });
+        if mode == MetadataFetchMode::Automatic {
+            let fetch_times = transaction
+                .query_row(
+                    "SELECT last_attempt_at, last_success_at FROM product_metadata_fetches WHERE item_id = ?1",
+                    [item_id],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?)),
+                )
+                .optional()?;
+            if let Some((last_attempt, last_success)) = fetch_times {
+                let success_is_fresh = last_success.is_some_and(|last_success| {
+                    elapsed_seconds(now, last_success) < policy.success_cache_seconds
+                });
+                let attempt_is_recent =
+                    elapsed_seconds(now, last_attempt) < policy.failed_retry_seconds;
+                if success_is_fresh || attempt_is_recent {
+                    transaction.commit()?;
+                    return Ok(MetadataFetchReservation::Skip {
+                        cached,
+                        reason: MetadataFetchSkipReason::CachedOrCoolingDown,
+                    });
+                }
             }
         }
 
@@ -214,7 +251,10 @@ impl Database {
             elapsed_seconds(now, last_request) < policy.minimum_interval_seconds
         }) {
             transaction.commit()?;
-            return Ok(MetadataFetchReservation::Skip { cached });
+            return Ok(MetadataFetchReservation::Skip {
+                cached,
+                reason: MetadataFetchSkipReason::MinimumInterval,
+            });
         }
 
         transaction.execute(
@@ -602,33 +642,103 @@ mod tests {
 
         assert!(matches!(
             database
-                .reserve_product_metadata_fetch(123, 1_000, METADATA_POLICY)
+                .reserve_product_metadata_fetch(
+                    123,
+                    1_000,
+                    METADATA_POLICY,
+                    MetadataFetchMode::Automatic,
+                )
                 .expect("first reservation"),
             MetadataFetchReservation::Fetch { stale: None }
         ));
         assert!(matches!(
             database
-                .reserve_product_metadata_fetch(456, 1_005, METADATA_POLICY)
+                .reserve_product_metadata_fetch(
+                    456,
+                    1_005,
+                    METADATA_POLICY,
+                    MetadataFetchMode::Automatic,
+                )
                 .expect("global rate limit"),
-            MetadataFetchReservation::Skip { cached: None }
+            MetadataFetchReservation::Skip {
+                cached: None,
+                reason: MetadataFetchSkipReason::MinimumInterval,
+            }
         ));
 
         database
             .record_product_metadata_fetch_success(&product_metadata(123), 1_000)
             .expect("record success");
         match database
-            .reserve_product_metadata_fetch(123, 2_000, METADATA_POLICY)
+            .reserve_product_metadata_fetch(
+                123,
+                2_000,
+                METADATA_POLICY,
+                MetadataFetchMode::Automatic,
+            )
             .expect("cached reservation")
         {
             MetadataFetchReservation::Skip {
                 cached: Some(cached),
+                reason: MetadataFetchSkipReason::CachedOrCoolingDown,
             } => assert_eq!(cached.name, "Example"),
             reservation => panic!("unexpected reservation: {reservation:?}"),
         }
         assert!(matches!(
             database
-                .reserve_product_metadata_fetch(123, 5_000, METADATA_POLICY)
+                .reserve_product_metadata_fetch(
+                    123,
+                    5_000,
+                    METADATA_POLICY,
+                    MetadataFetchMode::Automatic,
+                )
                 .expect("stale reservation"),
+            MetadataFetchReservation::Fetch { stale: Some(_) }
+        ));
+    }
+
+    #[test]
+    fn manual_metadata_fetch_bypasses_item_cache_but_keeps_global_interval() {
+        let directory = tempdir().expect("tempdir");
+        let database = Database::initialize(directory.path().join("test.db")).expect("database");
+        assert!(matches!(
+            database
+                .reserve_product_metadata_fetch(
+                    123,
+                    1_000,
+                    METADATA_POLICY,
+                    MetadataFetchMode::Automatic,
+                )
+                .expect("initial reservation"),
+            MetadataFetchReservation::Fetch { stale: None }
+        ));
+        database
+            .record_product_metadata_fetch_success(&product_metadata(123), 1_000)
+            .expect("record success");
+
+        assert!(matches!(
+            database
+                .reserve_product_metadata_fetch(
+                    123,
+                    1_005,
+                    METADATA_POLICY,
+                    MetadataFetchMode::Manual,
+                )
+                .expect("manual interval limit"),
+            MetadataFetchReservation::Skip {
+                cached: Some(_),
+                reason: MetadataFetchSkipReason::MinimumInterval,
+            }
+        ));
+        assert!(matches!(
+            database
+                .reserve_product_metadata_fetch(
+                    123,
+                    1_010,
+                    METADATA_POLICY,
+                    MetadataFetchMode::Manual,
+                )
+                .expect("manual refresh"),
             MetadataFetchReservation::Fetch { stale: Some(_) }
         ));
     }
@@ -646,13 +756,26 @@ mod tests {
 
         assert!(matches!(
             database
-                .reserve_product_metadata_fetch(123, 5_000, METADATA_POLICY)
+                .reserve_product_metadata_fetch(
+                    123,
+                    5_000,
+                    METADATA_POLICY,
+                    MetadataFetchMode::Automatic,
+                )
                 .expect("paused reservation"),
-            MetadataFetchReservation::Skip { cached: None }
+            MetadataFetchReservation::Skip {
+                cached: None,
+                reason: MetadataFetchSkipReason::Paused,
+            }
         ));
         assert!(matches!(
             database
-                .reserve_product_metadata_fetch(123, 10_000, METADATA_POLICY)
+                .reserve_product_metadata_fetch(
+                    123,
+                    10_000,
+                    METADATA_POLICY,
+                    MetadataFetchMode::Automatic,
+                )
                 .expect("pause expired"),
             MetadataFetchReservation::Fetch { stale: None }
         ));

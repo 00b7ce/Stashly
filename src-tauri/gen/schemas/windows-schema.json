@@ -387,6 +387,12 @@
           "markdownDescription": "Enables the open_product_folder command without any pre-configured scope."
         },
         {
+          "description": "Enables the refresh_product_metadata command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-refresh-product-metadata",
+          "markdownDescription": "Enables the refresh_product_metadata command without any pre-configured scope."
+        },
+        {
           "description": "Enables the resize_booth_browser command without any pre-configured scope.",
           "type": "string",
           "const": "allow-resize-booth-browser",
@@ -439,6 +445,12 @@
           "type": "string",
           "const": "deny-open-product-folder",
           "markdownDescription": "Denies the open_product_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the refresh_product_metadata command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-refresh-product-metadata",
+          "markdownDescription": "Denies the refresh_product_metadata command without any pre-configured scope."
         },
         {
           "description": "Denies the resize_booth_browser command without any pre-configured scope.",

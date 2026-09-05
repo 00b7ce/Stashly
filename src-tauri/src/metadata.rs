@@ -11,7 +11,10 @@ use scraper::{Html, Selector};
 use url::Url;
 
 use crate::{
-    db::{Database, MetadataFetchPolicy, MetadataFetchReservation},
+    db::{
+        Database, MetadataFetchMode, MetadataFetchPolicy, MetadataFetchReservation,
+        MetadataFetchSkipReason,
+    },
     error::{AppError, AppResult},
     model::UpsertProductInput,
 };
@@ -45,10 +48,10 @@ pub async fn product_metadata_for_download(
 ) -> Option<UpsertProductInput> {
     let now = Utc::now().timestamp();
     let reservation = database
-        .reserve_product_metadata_fetch(item_id, now, FETCH_POLICY)
+        .reserve_product_metadata_fetch(item_id, now, FETCH_POLICY, MetadataFetchMode::Automatic)
         .ok()?;
     let stale = match reservation {
-        MetadataFetchReservation::Skip { cached } => return cached,
+        MetadataFetchReservation::Skip { cached, .. } => return cached,
         MetadataFetchReservation::Fetch { stale } => stale,
     };
 
@@ -62,6 +65,45 @@ pub async fn product_metadata_for_download(
             stale
         }
         FetchOutcome::Unavailable => stale,
+    }
+}
+
+pub async fn refresh_product_metadata(database: &Database, item_id: i64) -> AppResult<()> {
+    if !database.has_product(item_id)? {
+        return Err(AppError::ProductNotFound);
+    }
+
+    let now = Utc::now().timestamp();
+    match database.reserve_product_metadata_fetch(
+        item_id,
+        now,
+        FETCH_POLICY,
+        MetadataFetchMode::Manual,
+    )? {
+        MetadataFetchReservation::Fetch { .. } => {}
+        MetadataFetchReservation::Skip {
+            reason: MetadataFetchSkipReason::MinimumInterval,
+            ..
+        } => return Err(AppError::MetadataFetchTooSoon),
+        MetadataFetchReservation::Skip {
+            reason: MetadataFetchSkipReason::Paused,
+            ..
+        } => return Err(AppError::MetadataFetchPaused),
+        MetadataFetchReservation::Skip {
+            reason: MetadataFetchSkipReason::CachedOrCoolingDown,
+            ..
+        } => return Err(AppError::MetadataFetchTooSoon),
+    }
+
+    match fetch_product_metadata(item_id, now).await {
+        FetchOutcome::Success(product) => {
+            database.record_product_metadata_fetch_success(&product, now)
+        }
+        FetchOutcome::RateLimited { pause_until } => {
+            database.pause_product_metadata_fetches_until(pause_until)?;
+            Err(AppError::MetadataFetchPaused)
+        }
+        FetchOutcome::Unavailable => Err(AppError::MetadataFetchUnavailable),
     }
 }
 

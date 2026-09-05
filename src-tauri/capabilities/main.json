@@ -16,6 +16,7 @@
       ]
     },
     "allow-get-library",
+    "allow-refresh-product-metadata",
     "allow-set-library-root",
     "allow-open-booth-browser",
     "allow-hide-booth-browser",

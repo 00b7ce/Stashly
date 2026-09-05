@@ -16,6 +16,12 @@ pub enum AppError {
     LibraryRootContainsArtifacts,
     #[error("The requested product is not in the local library")]
     ProductNotFound,
+    #[error("BOOTHからの商品情報取得が一時停止されています。時間を置いて再試行してください")]
+    MetadataFetchPaused,
+    #[error("商品情報の取得間隔が短すぎます。数秒待ってから再試行してください")]
+    MetadataFetchTooSoon,
+    #[error("BOOTHから商品情報を取得できませんでした")]
+    MetadataFetchUnavailable,
     #[error("The requested path is outside the configured library root")]
     PathOutsideLibrary,
     #[error("The BOOTH download URL was rejected")]
