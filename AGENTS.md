@@ -7,7 +7,7 @@ Stashly is an unofficial Windows desktop library manager for files downloaded fr
 ## Architecture
 
 - `src/`: React and TypeScript local management UI.
-- `src-tauri/src/`: Rust application core, WebView policy, native WebView downloads, SQLite storage, and post-processing.
+- `src-tauri/src/`: Rust application core, WebView policy, native WebView downloads, SQLite storage, post-processing, and the signature-verified app updater.
 - `PRIVACY.md`: bundled privacy policy shown by the first-run consent gate and Settings dialog.
 - `docs/architecture.md`: trust boundaries and data flow.
 - `docs/development.md`: setup and verification commands.
@@ -38,6 +38,8 @@ The main React application must not mount before the user has accepted the exact
 - ZIP extraction must occur only in the application staging directory, reject traversal and links, enforce entry and expanded-size limits, and publish the extracted directory atomically. Never execute extracted files.
 - Deletion is out of scope until a Recycle Bin workflow with explicit confirmation exists.
 - Accept native downloads only after a validated, short-lived intent from the BOOTH library; fail closed if the DOM or ordinary download-link shape changes.
+- Keep updater checks behind privacy consent. Expose only the app-owned update commands to `main`; never grant the generic updater plugin commands to `booth-browser`.
+- Never commit, print, or log the updater private key. Release updater artifacts must be signed, and product downloads must be idle before an update can start.
 
 ## Git and verification
 
@@ -45,3 +47,4 @@ The main React application must not mount before the user has accepted the exact
 - Do not commit generated build output, databases, browser profiles, downloaded products, or secrets.
 - Update architecture/development documentation when behavior or commands change.
 - Before completion, run frontend tests/build plus Rust fmt, clippy, and tests. For browser work, verify that the official protocol handler remains unchanged.
+- For updater release work, separately verify the NSIS artifact, updater `.sig`, and `latest.json`; updater signing is not Authenticode signing.

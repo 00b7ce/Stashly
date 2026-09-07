@@ -174,6 +174,40 @@ type MetadataFeedback = {
   message: string;
 };
 
+export type AvailableUpdate = {
+  currentVersion: string;
+  version: string;
+  notes: string | null;
+};
+
+export type UpdateInstallProgress = {
+  stage: "downloading" | "installing";
+  downloadedBytes: number;
+  contentLength: number | null;
+};
+
+type UpdateInstallEvent =
+  | {
+      event: "downloading";
+      downloadedBytes: number;
+      contentLength: number | null;
+    }
+  | { event: "downloaded" };
+
+type UpdateFeedback = MetadataFeedback;
+
+let updateCheckInFlight: Promise<AvailableUpdate | null> | null = null;
+
+function requestUpdateCheck(): Promise<AvailableUpdate | null> {
+  if (!updateCheckInFlight) {
+    updateCheckInFlight = invoke<AvailableUpdate | null>("check_update")
+      .finally(() => {
+        updateCheckInFlight = null;
+      });
+  }
+  return updateCheckInFlight;
+}
+
 export type LibraryRootCandidate = {
   path: string;
   kind: Exclude<LibraryStorageKind, "local">;
@@ -212,6 +246,13 @@ export function App() {
   const [browserUrl, setBrowserUrl] = useState(BOOTH_TOP_URL);
   const [appVersion, setAppVersion] = useState("取得中…");
   const [metadataFeedback, setMetadataFeedback] = useState<MetadataFeedback | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<AvailableUpdate | null>(null);
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateFeedback, setUpdateFeedback] = useState<UpdateFeedback | null>(null);
+  const [updateInstalling, setUpdateInstalling] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState<UpdateInstallProgress | null>(null);
+  const [updateInstallError, setUpdateInstallError] = useState<string | null>(null);
   const contentRef = useRef<HTMLElement>(null);
   const browserViewportRef = useRef<HTMLDivElement>(null);
   const notificationTimers = useRef(new Map<string, number>());
@@ -221,6 +262,52 @@ export function App() {
   const effectiveTheme = themeMode === "system"
     ? (systemDark ? "dark" : "light")
     : themeMode;
+
+  const checkForUpdates = useCallback(async (manual: boolean) => {
+    setUpdateChecking(true);
+    if (manual) setUpdateFeedback(null);
+    try {
+      const available = await requestUpdateCheck();
+      setUpdateInfo(available);
+      if (available) {
+        setUpdateFeedback({
+          kind: "success",
+          message: `バージョン ${available.version} を利用できます。`,
+        });
+        setUpdateInstallError(null);
+        setUpdateDialogOpen(true);
+      } else if (manual) {
+        setUpdateFeedback({ kind: "success", message: "現在のバージョンが最新です。" });
+      }
+    } catch (reason) {
+      setUpdateFeedback({
+        kind: "error",
+        message: manual
+          ? errorText(reason)
+          : "起動時の更新確認を完了できませんでした。設定から再確認できます。",
+      });
+    } finally {
+      setUpdateChecking(false);
+    }
+  }, []);
+
+  const installAvailableUpdate = useCallback(async () => {
+    setUpdateInstalling(true);
+    setUpdateInstallError(null);
+    setUpdateProgress({ stage: "downloading", downloadedBytes: 0, contentLength: null });
+    try {
+      await invoke("install_update");
+      setUpdateProgress((current) => ({
+        stage: "installing",
+        downloadedBytes: current?.downloadedBytes ?? 0,
+        contentLength: current?.contentLength ?? null,
+      }));
+    } catch (reason) {
+      setUpdateInstallError(errorText(reason));
+      setUpdateInstalling(false);
+      setUpdateProgress(null);
+    }
+  }, []);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -246,6 +333,31 @@ export function App() {
       setBrowserUrl(payload);
       const view = browserViewForUrl(payload);
       if (view) setActiveView(view);
+    });
+    return () => {
+      void unlisten.then((dispose) => dispose());
+    };
+  }, []);
+
+  useEffect(() => {
+    void checkForUpdates(false);
+  }, [checkForUpdates]);
+
+  useEffect(() => {
+    const unlisten = listen<UpdateInstallEvent>("update-install-progress", ({ payload }) => {
+      if (payload.event === "downloaded") {
+        setUpdateProgress((current) => ({
+          stage: "installing",
+          downloadedBytes: current?.downloadedBytes ?? 0,
+          contentLength: current?.contentLength ?? null,
+        }));
+        return;
+      }
+      setUpdateProgress({
+        stage: "downloading",
+        downloadedBytes: payload.downloadedBytes,
+        contentLength: payload.contentLength,
+      });
     });
     return () => {
       void unlisten.then((dispose) => dispose());
@@ -631,6 +743,9 @@ export function App() {
             cleanupMessage={cleanupMessage}
             clearingBrowserData={clearingBrowserData}
             browserDataMessage={browserDataMessage}
+            updateChecking={updateChecking}
+            updateAvailable={updateInfo}
+            updateFeedback={updateFeedback}
             onChooseRoot={() => void chooseLibraryRoot()}
             onThemeChange={changeThemeMode}
             onAccentColorChange={changeAccentColor}
@@ -638,6 +753,8 @@ export function App() {
             onClearBrowserData={requestClearBrowserData}
             onOpenPrivacyPolicy={() => setPrivacyPolicyOpen(true)}
             onOpenOfficialInformation={openOfficialInformation}
+            onCheckForUpdates={() => void checkForUpdates(true)}
+            onShowUpdate={() => setUpdateDialogOpen(true)}
           />
         ) : activeView === "library" ? (
           <>
@@ -739,6 +856,18 @@ export function App() {
 
         {privacyPolicyOpen && (
           <PrivacyPolicyDialog onClose={() => setPrivacyPolicyOpen(false)} />
+        )}
+
+        {updateDialogOpen && updateInfo && !browserViewActive && !deleteConfirmationOpen &&
+          !browserDataConfirmationOpen && !pendingLibraryRoot && !privacyPolicyOpen && (
+          <UpdateDialog
+            update={updateInfo}
+            installing={updateInstalling}
+            progress={updateProgress}
+            error={updateInstallError}
+            onCancel={() => setUpdateDialogOpen(false)}
+            onInstall={() => void installAvailableUpdate()}
+          />
         )}
       </main>
     </div>
@@ -1045,7 +1174,73 @@ export function LibraryRootConfirmationDialog({ candidate, saving, onCancel, onC
   </div>;
 }
 
-export function SettingsView({ appVersion, libraryRoot, libraryStorage, themeMode, accentColor, deleting, cleanupMessage, clearingBrowserData, browserDataMessage, onChooseRoot, onThemeChange, onAccentColorChange, onDelete, onClearBrowserData, onOpenPrivacyPolicy, onOpenOfficialInformation }: {
+export function UpdateDialog({ update, installing, progress, error, onCancel, onInstall }: {
+  update: AvailableUpdate;
+  installing: boolean;
+  progress: UpdateInstallProgress | null;
+  error: string | null;
+  onCancel: () => void;
+  onInstall: () => void;
+}) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const progressPercent = progress?.contentLength
+    ? Math.min(100, Math.round((progress.downloadedBytes / progress.contentLength) * 100))
+    : null;
+
+  useEffect(() => {
+    cancelRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !installing) onCancel();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [installing, onCancel]);
+
+  return <div
+    className="modal-backdrop"
+    onMouseDown={(event) => event.target === event.currentTarget && !installing && onCancel()}
+  >
+    <section className="confirmation-dialog update-dialog" role="dialog" aria-modal="true" aria-labelledby="update-dialog-title" aria-describedby="update-dialog-description">
+      <div className="confirmation-icon update-icon"><Download size={25} /></div>
+      <div className="confirmation-copy">
+        <p className="eyebrow">STASHLY UPDATE</p>
+        <h2 id="update-dialog-title">新しいバージョンを利用できます</h2>
+        <p id="update-dialog-description">
+          更新をダウンロードして署名を確認した後、Stashlyを終了して更新します。完了後は自動的に再起動します。
+        </p>
+        <dl className="update-version-information">
+          <div><dt>現在</dt><dd>{update.currentVersion}</dd></div>
+          <div><dt>更新後</dt><dd>{update.version}</dd></div>
+        </dl>
+        {update.notes && <div className="update-notes">
+          <h3>更新内容</h3>
+          <pre>{update.notes}</pre>
+        </div>}
+        {error && <div className="update-error" role="alert"><TriangleAlert size={17} />{error}</div>}
+        {installing && progress && <div className="update-progress" role="status" aria-live="polite">
+          <div className="update-progress-copy">
+            <span>{progress.stage === "downloading" ? "更新をダウンロードしています…" : "署名を確認してインストールを開始しています…"}</span>
+            {progressPercent !== null && progress.stage === "downloading" && <strong>{progressPercent}%</strong>}
+          </div>
+          <progress
+            value={progressPercent ?? undefined}
+            max={100}
+            aria-label="更新のダウンロード進捗"
+          />
+        </div>}
+      </div>
+      <div className="confirmation-actions">
+        <button ref={cancelRef} className="modal-cancel" type="button" onClick={onCancel} disabled={installing}>あとで</button>
+        <button className="modal-update" type="button" onClick={onInstall} disabled={installing}>
+          {installing ? <LoaderCircle size={17} className="spin" /> : <Download size={17} />}
+          {installing ? "更新しています…" : "更新して再起動"}
+        </button>
+      </div>
+    </section>
+  </div>;
+}
+
+export function SettingsView({ appVersion, libraryRoot, libraryStorage, themeMode, accentColor, deleting, cleanupMessage, clearingBrowserData, browserDataMessage, updateChecking, updateAvailable, updateFeedback, onChooseRoot, onThemeChange, onAccentColorChange, onDelete, onClearBrowserData, onOpenPrivacyPolicy, onOpenOfficialInformation, onCheckForUpdates, onShowUpdate }: {
   appVersion: string;
   libraryRoot: string | null;
   libraryStorage: LibraryStorageSummary | null;
@@ -1055,6 +1250,9 @@ export function SettingsView({ appVersion, libraryRoot, libraryStorage, themeMod
   cleanupMessage: string | null;
   clearingBrowserData: boolean;
   browserDataMessage: string | null;
+  updateChecking: boolean;
+  updateAvailable: AvailableUpdate | null;
+  updateFeedback: UpdateFeedback | null;
   onChooseRoot: () => void;
   onThemeChange: (mode: ThemeMode) => void;
   onAccentColorChange: (color: string) => void;
@@ -1062,6 +1260,8 @@ export function SettingsView({ appVersion, libraryRoot, libraryStorage, themeMod
   onClearBrowserData: () => void;
   onOpenPrivacyPolicy: () => void;
   onOpenOfficialInformation: (url: OfficialInformationUrl) => void;
+  onCheckForUpdates: () => void;
+  onShowUpdate: () => void;
 }) {
   return <section className="settings-layout" aria-label="設定">
     <article className="settings-card">
@@ -1104,6 +1304,27 @@ export function SettingsView({ appVersion, libraryRoot, libraryStorage, themeMod
         <button className="secondary-button" type="button" onClick={onOpenPrivacyPolicy}>
           <ShieldCheck size={17} />プライバシーポリシーを表示
         </button>
+      </div>
+    </article>
+
+    <article className="settings-card">
+      <div className="settings-icon"><RefreshCw size={22} /></div>
+      <div className="settings-body">
+        <h2>アプリの更新</h2>
+        <p>起動時にGitHub Releasesで最新版を確認します。ここから手動でも確認できます。</p>
+        {updateFeedback && <div className={`settings-feedback ${updateFeedback.kind}`} role={updateFeedback.kind === "error" ? "alert" : "status"}>
+          {updateFeedback.kind === "error" ? <TriangleAlert size={17} /> : <CheckCircle2 size={17} />}
+          <span>{updateFeedback.message}</span>
+        </div>}
+        <div className="update-settings-actions">
+          <button className="secondary-button" type="button" onClick={onCheckForUpdates} disabled={updateChecking}>
+            <RefreshCw size={17} className={updateChecking ? "spin" : ""} />
+            {updateChecking ? "確認しています…" : "更新を確認"}
+          </button>
+          {updateAvailable && <button className="secondary-button update-available-button" type="button" onClick={onShowUpdate}>
+            <Download size={17} />更新内容を表示
+          </button>}
+        </div>
       </div>
     </article>
 

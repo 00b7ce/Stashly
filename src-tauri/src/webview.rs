@@ -1239,6 +1239,13 @@ mod tests {
         assert!(capability.get("remote").is_none());
         assert!(permissions.contains(&serde_json::json!("allow-navigate-booth-browser")));
         assert!(permissions.contains(&serde_json::json!("allow-clear-booth-browser-data")));
+        assert!(permissions.contains(&serde_json::json!("allow-check-update")));
+        assert!(permissions.contains(&serde_json::json!("allow-install-update")));
+        assert!(!permissions.iter().any(|permission| {
+            permission
+                .as_str()
+                .is_some_and(|permission| permission.starts_with("updater:"))
+        }));
         assert!(!permissions.contains(&serde_json::json!(
             "core:webview:allow-clear-all-browsing-data"
         )));

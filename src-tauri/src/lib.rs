@@ -7,6 +7,7 @@ mod metadata;
 mod model;
 mod security;
 mod storage;
+mod updater;
 mod webview;
 
 use tauri::Manager;
@@ -20,6 +21,7 @@ pub struct AppState {
     active_download_notifications: webview::ActiveDownloadNotifications,
     completed_download_actions: webview::CompletedDownloadActions,
     native_downloads: webview::NativeDownloads,
+    updates: updater::UpdateState,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -27,6 +29,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             #[cfg(debug_assertions)]
             let data_dir = std::env::var_os("STASHLY_DEV_DATA_DIR")
@@ -51,6 +54,7 @@ pub fn run() {
                 active_download_notifications: webview::ActiveDownloadNotifications::default(),
                 completed_download_actions: webview::CompletedDownloadActions::default(),
                 native_downloads: webview::NativeDownloads::default(),
+                updates: updater::UpdateState::default(),
             });
             Ok(())
         })
@@ -65,6 +69,8 @@ pub fn run() {
             commands::clear_booth_browser_data,
             commands::open_product_folder,
             commands::delete_downloaded_files,
+            updater::check_update,
+            updater::install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Stashly");

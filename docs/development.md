@@ -33,6 +33,7 @@ For a manual download test, use a free item already present in the user's accoun
 
 - with no `stashly-privacy-consent-version` value, the full bundled policy appears and the main application is not mounted; the accept action stays disabled until the checkbox is selected;
 - accepting stores the exact current policy version and starts the application, a stale version requires consent again, and declining closes the window;
+- the automatic GitHub Releases update check starts only after current-policy consent and a failed check does not block normal library use;
 - Settings opens the same bundled Stashly policy in an in-app dialog without confusing it with the external BOOTH/pixiv official policy links;
 - the ordinary BOOTH download stays inside the dedicated WebView download flow and no copy appears in the system Downloads folder;
 - BOOTH opens inside the main native window beside the persistent sidebar, without creating another top-level window;
@@ -76,6 +77,9 @@ For a manual download test, use a free item already present in the user's accoun
 - metadata requests use the documented Stashly User-Agent and reject redirects outside exact public BOOTH product URLs, non-HTML responses, oversized HTML heads, and non-BOOTH image hosts;
 - metadata refresh failure does not prevent the downloaded artifact from being finalized;
 - Settings shows the packaged application version and an explicit nonofficial notice; the terms and privacy links open the expected official pages in the system browser under a separate official-information heading, with no BOOTH support link presented as the app's support contact;
+- Settings can manually check for an update, clearly reports both the latest-version and failure states, and reopens the available-update dialog after it was deferred;
+- an available update dialog renders release notes as plain text, remains dismissible before installation, shows download progress after confirmation, and explains that Stashly exits and restarts;
+- starting an update while a BOOTH product download is active is rejected without interrupting that download; once update download begins, new BOOTH product downloads are rejected until update installation or failure releases the guard;
 - the delete action opens a themed in-app confirmation, initially focuses Cancel, closes on Escape, and does not delete until the destructive button is explicitly chosen;
 - Settings displays a normal drive or UNC path without the Windows verbatim `\\?\` prefix;
 - cancelling the cleanup confirmation removes nothing;
@@ -87,10 +91,24 @@ For a manual download test, use a free item already present in the user's accoun
 
 ## Packaging
 
+Updater artifacts must be signed. For a local packaging check, point Tauri at the private updater key stored outside the repository:
+
 ```powershell
-npm.cmd run tauri -- build --bundles nsis
+$updaterKeyPath = Join-Path $env:USERPROFILE ".tauri\stashly-updater.key"
+$env:TAURI_SIGNING_PRIVATE_KEY = $updaterKeyPath
+$env:CI = "true"
+try {
+  npm.cmd run tauri -- build --bundles nsis
+} finally {
+  Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
+  Remove-Item Env:CI -ErrorAction SilentlyContinue
+}
 ```
 
-The tag-triggered release workflow adds a GitHub-linked list of commits since the previous reachable `v*` tag to the draft Release body, together with a compare link. If no previous release tag exists, it lists commits from the beginning of the repository instead.
+Keep the private key outside Git, restrict its filesystem permissions, and maintain a recoverable encrypted backup. Losing it prevents installed copies from accepting future updates signed by the same public key. Do not print the key in logs or copy it into documentation.
+
+The tag-triggered release workflow requires the repository secret `TAURI_SIGNING_PRIVATE_KEY`. It adds a GitHub-linked list of commits since the previous reachable `v*` tag to the draft Release body, together with a compare link. If no previous release tag exists, it lists commits from the beginning of the repository instead. Tauri generates the NSIS updater signature and `tauri-action` uploads that signature plus `latest.json`, preferring NSIS in the updater manifest. Keep the Release as a draft until its installer, `.sig`, and `latest.json` have been reviewed; installed applications see it only after publication.
+
+The first release that contains the updater must still be installed manually by users of an older build. In-app update validation begins with the following published release.
 
 Do not claim the installer is signed unless its Authenticode signature has been verified.

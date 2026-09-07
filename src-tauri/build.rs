@@ -10,6 +10,8 @@ fn main() {
         "clear_booth_browser_data",
         "open_product_folder",
         "delete_downloaded_files",
+        "check_update",
+        "install_update",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
         .expect("failed to run tauri build script");

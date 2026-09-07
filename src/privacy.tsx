@@ -5,7 +5,7 @@ import { CheckCircle2, ShieldCheck, X } from "lucide-react";
 import Markdown from "react-markdown";
 import privacyDocument from "../PRIVACY.md?raw";
 
-export const PRIVACY_VERSION = "2026-09-05";
+export const PRIVACY_VERSION = "2026-09-08";
 export const PRIVACY_CONSENT_STORAGE_KEY = "stashly-privacy-consent-version";
 export const PRIVACY_SUPPORT_URL = "https://github.com/00b7ce/Stashly/issues";
 

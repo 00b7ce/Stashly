@@ -38,6 +38,7 @@ describe("PrivacyGate", () => {
     expect(screen.queryByText("application mounted")).toBeNull();
     expect(screen.getByRole("heading", { name: "プライバシーポリシー" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Stashly プライバシーポリシー", level: 3 })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "GitHub Releasesによるアプリ更新", level: 5 })).toBeTruthy();
     expect((screen.getByRole("button", { name: "同意して始める" }) as HTMLButtonElement).disabled).toBe(true);
   });
 

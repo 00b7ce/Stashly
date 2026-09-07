@@ -18,6 +18,7 @@ import {
   ProductCard,
   SettingsView,
   ThemePicker,
+  UpdateDialog,
   normalizeAccentColor,
 } from "./App";
 import type { DownloadStatus, Product } from "./library";
@@ -198,6 +199,9 @@ describe("SettingsView", () => {
         cleanupMessage={null}
         clearingBrowserData={false}
         browserDataMessage={null}
+        updateChecking={false}
+        updateAvailable={null}
+        updateFeedback={null}
         onChooseRoot={() => undefined}
         onThemeChange={() => undefined}
         onAccentColorChange={() => undefined}
@@ -205,6 +209,8 @@ describe("SettingsView", () => {
         onClearBrowserData={() => undefined}
         onOpenPrivacyPolicy={() => undefined}
         onOpenOfficialInformation={() => undefined}
+        onCheckForUpdates={() => undefined}
+        onShowUpdate={() => undefined}
       />,
     );
 
@@ -214,9 +220,57 @@ describe("SettingsView", () => {
     expect(markup).toContain("Stashlyのサポート窓口ではありません");
     expect(markup).toContain("Stashlyのプライバシー");
     expect(markup).toContain("プライバシーポリシーを表示");
+    expect(markup).toContain("アプリの更新");
+    expect(markup).toContain("更新を確認");
     expect(markup).toContain(`href="${OFFICIAL_TERMS_URL}"`);
     expect(markup).toContain(`href="${OFFICIAL_PRIVACY_URL}"`);
     expect(markup).not.toContain("BOOTH公式サポート");
+  });
+});
+
+describe("UpdateDialog", () => {
+  it("shows versions and treats release notes as plain text", () => {
+    const markup = renderToStaticMarkup(
+      <UpdateDialog
+        update={{
+          currentVersion: "1.2.1",
+          version: "1.3.0",
+          notes: "<script>alert('no')</script>\n- fixes",
+        }}
+        installing={false}
+        progress={null}
+        error={null}
+        onCancel={() => undefined}
+        onInstall={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain("1.2.1");
+    expect(markup).toContain("1.3.0");
+    expect(markup).toContain("更新して再起動");
+    expect(markup).toContain("&lt;script&gt;alert(&#x27;no&#x27;)&lt;/script&gt;");
+    expect(markup).not.toContain("<script>");
+  });
+
+  it("locks dismissal and reports download progress while installing", () => {
+    const markup = renderToStaticMarkup(
+      <UpdateDialog
+        update={{
+          currentVersion: "1.2.1",
+          version: "1.3.0",
+          notes: null,
+        }}
+        installing
+        progress={{ stage: "downloading", downloadedBytes: 50, contentLength: 100 }}
+        error={null}
+        onCancel={() => undefined}
+        onInstall={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain("50%");
+    expect(markup).toContain('value="50"');
+    expect(markup.match(/disabled=""/g)).toHaveLength(2);
   });
 });
 

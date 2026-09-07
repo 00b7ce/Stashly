@@ -34,6 +34,12 @@ pub enum EnqueueError {
     Unavailable,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExclusiveOperationError {
+    DownloadsInProgress,
+    OperationInProgress,
+}
+
 #[derive(Clone, Default)]
 pub struct DownloadQueue {
     state: Arc<Mutex<QueueState>>,
@@ -63,15 +69,25 @@ impl DownloadQueue {
     }
 
     pub fn begin_cleanup(&self) -> AppResult<CleanupGuard> {
+        self.begin_exclusive_operation()
+            .map_err(|error| match error {
+                ExclusiveOperationError::DownloadsInProgress => AppError::DownloadsInProgress,
+                ExclusiveOperationError::OperationInProgress => AppError::LibraryCleanupInProgress,
+            })
+    }
+
+    pub(crate) fn begin_exclusive_operation(
+        &self,
+    ) -> Result<CleanupGuard, ExclusiveOperationError> {
         let mut state = self
             .state
             .lock()
-            .map_err(|_| AppError::LibraryCleanupInProgress)?;
+            .map_err(|_| ExclusiveOperationError::OperationInProgress)?;
         if state.cleanup_active {
-            return Err(AppError::LibraryCleanupInProgress);
+            return Err(ExclusiveOperationError::OperationInProgress);
         }
         if state.pending > 0 {
-            return Err(AppError::DownloadsInProgress);
+            return Err(ExclusiveOperationError::DownloadsInProgress);
         }
         state.cleanup_active = true;
         Ok(CleanupGuard {
@@ -472,8 +488,9 @@ mod tests {
     use std::io::Write as _;
 
     use super::{
-        DownloadQueue, EnqueueError, extract_zip_safely, hash_native_staging_file, is_zip_filename,
-        publish_extracted_directory, redundant_single_root, sanitize_archive_path,
+        DownloadQueue, EnqueueError, ExclusiveOperationError, extract_zip_safely,
+        hash_native_staging_file, is_zip_filename, publish_extracted_directory,
+        redundant_single_root, sanitize_archive_path,
     };
     use crate::error::AppError;
 
@@ -531,6 +548,17 @@ mod tests {
         ));
         drop(permit);
         assert!(queue.begin_cleanup().is_ok());
+    }
+
+    #[test]
+    fn exclusive_operations_report_the_active_download_boundary() {
+        let queue = DownloadQueue::default();
+        let _download = queue.try_reserve().unwrap();
+
+        assert!(matches!(
+            queue.begin_exclusive_operation(),
+            Err(ExclusiveOperationError::DownloadsInProgress)
+        ));
     }
 
     #[test]

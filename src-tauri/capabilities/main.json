@@ -24,6 +24,8 @@
     "allow-navigate-booth-browser",
     "allow-clear-booth-browser-data",
     "allow-open-product-folder",
-    "allow-delete-downloaded-files"
+    "allow-delete-downloaded-files",
+    "allow-check-update",
+    "allow-install-update"
   ]
 }
