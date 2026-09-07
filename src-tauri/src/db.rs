@@ -366,7 +366,7 @@ impl Database {
             .optional()?;
         Ok(path
             .map(PathBuf::from)
-            .and_then(|path| path.parent().map(Path::to_path_buf)))
+            .and_then(|path| product_root_from_artifact(&path)))
     }
 
     pub fn artifact_paths_for_download(
@@ -429,11 +429,10 @@ impl Database {
         )?;
         let rows = statement.query_map([], |row| {
             let artifact_path: Option<String> = row.get(5)?;
-            let local_path = artifact_path.as_deref().and_then(|path| {
-                PathBuf::from(path)
-                    .parent()
-                    .map(|parent| parent.to_string_lossy().into_owned())
-            });
+            let local_path = artifact_path
+                .as_deref()
+                .and_then(|path| product_root_from_artifact(Path::new(path)))
+                .map(|path| path.to_string_lossy().into_owned());
             Ok(ProductSummary {
                 item_id: row.get(0)?,
                 name: row.get(1)?,
@@ -448,6 +447,13 @@ impl Database {
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
     }
+}
+
+fn product_root_from_artifact(artifact_path: &Path) -> Option<PathBuf> {
+    artifact_path
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
 }
 
 fn upsert_product_on(connection: &Connection, input: &UpsertProductInput) -> AppResult<()> {
@@ -850,6 +856,55 @@ mod tests {
                 .artifact_paths_for_download(&request)
                 .expect("artifact paths"),
             vec![artifact]
+        );
+    }
+
+    #[test]
+    fn resolves_the_shared_product_root_across_download_variations() {
+        let directory = tempdir().expect("tempdir");
+        let database = Database::initialize(directory.path().join("test.db")).expect("database");
+        let product_root = directory.path().join("Shop").join("Example [booth-123]");
+        let first_request = DownloadRequest {
+            request_id: "request-1".into(),
+            item_id: 123,
+            variation_id: 456,
+            downloadable_id: Some(1),
+            product_name: Some("Example".into()),
+            shop_name: Some("Shop".into()),
+            filename: "body.zip".into(),
+        };
+        let second_request = DownloadRequest {
+            request_id: "request-2".into(),
+            variation_id: 789,
+            downloadable_id: Some(2),
+            filename: "textures.zip".into(),
+            ..first_request.clone()
+        };
+        let first_artifact = product_root.join("variation-456").join("body");
+        let second_artifact = product_root.join("variation-789").join("textures");
+
+        for (artifact_id, request, artifact) in [
+            ("artifact-1", &first_request, &first_artifact),
+            ("artifact-2", &second_request, &second_artifact),
+        ] {
+            database
+                .ensure_download_metadata(request)
+                .expect("metadata");
+            database
+                .record_artifact(artifact_id, request, artifact, "hash", 1)
+                .expect("artifact");
+        }
+
+        assert_eq!(
+            database.product_path(123).expect("product path"),
+            Some(product_root.clone())
+        );
+        let products = database.list_products().expect("products");
+        assert_eq!(products.len(), 1);
+        assert_eq!(products[0].artifact_count, 2);
+        assert_eq!(
+            products[0].local_path.as_deref(),
+            Some(product_root.to_string_lossy().as_ref())
         );
     }
 }

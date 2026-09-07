@@ -69,6 +69,7 @@ The default folder shape is:
 ```
 
 Remote names are sanitized for Windows and the immutable BOOTH item ID disambiguates renamed or duplicate products.
+Folder actions always open the shared `<product> [booth-<item id>]` directory above all variation directories, so every downloaded file for the product remains visible even when BOOTH assigns separate variation IDs to its downloadable items.
 
 ## Compatibility strategy
 

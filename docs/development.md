@@ -58,6 +58,7 @@ For a manual download test, use a free item already present in the user's accoun
 - no download intent or signed URL appears in logs or SQLite;
 - the file lands under the selected test root;
 - the completed notification contains no filename, product ID, local path, or internal error text; its expiry bar decreases from right to left over six seconds, and clicking it still opens the downloaded product folder through an opaque one-time request ID;
+- after downloading two or more files for one product, including files assigned different variation IDs, both the completed notification and the local product card open the shared product directory above every variation so all downloads are visible together;
 - navigating, going back or forward, and reloading while a download is active restores one updating notification for each in-progress request;
 - a ZIP lands as an extracted directory and the original ZIP is absent;
 - traversal entries, links, more than 20,000 entries, and more than 16 GiB of expanded data are rejected without a partial final directory;
