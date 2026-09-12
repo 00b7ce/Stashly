@@ -38,7 +38,7 @@ For a manual download test, use a free item already present in the user's accoun
 - the ordinary BOOTH download stays inside the dedicated WebView download flow and no copy appears in the system Downloads folder;
 - BOOTH opens inside the main native window beside the persistent sidebar, without creating another top-level window;
 - expanding and collapsing the sidebar immediately repositions and resizes the embedded BOOTH page without overlap;
-- links that BOOTH marks to open in a new tab, including followed-shop updates and free-library item pages, open in the existing embedded WebView; a non-BOOTH/pixiv popup remains blocked;
+- links that BOOTH marks to open in a new tab, including followed-shop updates, free-library item pages, and exact BOOTH product links in product descriptions, open in the existing embedded WebView; a non-BOOTH/pixiv popup remains blocked;
 - a product opened from the free-download library selects the BOOTH sidebar destination, while returning to BOOTH library restores the previous free-download page;
 - the BOOTH toolbar stays above the embedded page, its back, forward, and reload buttons affect only the embedded browser, and its non-editable URL follows navigation;
 - primary-clicking the displayed URL copies the visible sanitized value and shows the confirmation popup; right-clicking opens no context menu, and the address cannot be edited, selected, or dragged;

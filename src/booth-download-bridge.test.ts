@@ -217,6 +217,57 @@ describe("BOOTH download bridge", () => {
     );
   });
 
+  it("opens a product-description BOOTH link in the existing browser", () => {
+    window.history.replaceState({}, "", "/ja/items/8833509");
+    document.body.innerHTML = `
+      <main>
+        <a
+          href="https://booth.pm/ja/items/8779825"
+          target="_blank"
+          rel="nofollow noopener"
+        >
+          https://booth.pm/ja/items/8779825
+        </a>
+      </main>
+    `;
+    window.eval(bridgeSource);
+    const link = document.querySelector<HTMLAnchorElement>('a[href*="/items/"]');
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+
+    link?.dispatchEvent(event);
+
+    const bridgeWindow = window as unknown as Record<string, unknown>;
+    expect(event.defaultPrevented).toBe(true);
+    expect(bridgeWindow.__stashlyTestNavigation).toBe(
+      "https://booth.pm/ja/items/8779825",
+    );
+  });
+
+  it("leaves a same-window product-description link to BOOTH handling", () => {
+    window.history.replaceState({}, "", "/ja/items/8833509");
+    document.body.innerHTML = `
+      <main>
+        <a href="https://booth.pm/ja/items/8779825">
+          https://booth.pm/ja/items/8779825
+        </a>
+      </main>
+    `;
+    window.eval(bridgeSource);
+    const link = document.querySelector<HTMLAnchorElement>('a[href*="/items/"]');
+    let linkHandledNormally = false;
+    link?.addEventListener("click", (event) => {
+      linkHandledNormally = true;
+      event.preventDefault();
+    });
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+
+    link?.dispatchEvent(event);
+
+    const bridgeWindow = window as unknown as Record<string, unknown>;
+    expect(linkHandledNormally).toBe(true);
+    expect(bridgeWindow.__stashlyTestNavigation).toBeUndefined();
+  });
+
   it("does not intercept a lookalike product host from the library", () => {
     renderLibrary();
     const link = document.querySelector<HTMLAnchorElement>('a[href*="/items/"]');

@@ -378,9 +378,12 @@
         registerDownloadIntent(download, itemId);
         return;
       }
-      if (!link || !isLibraryPage()) return;
+      if (!link) return;
       const product = parseProductUrl(link.href);
       if (!product) return;
+      const isBlankTargetOnProductPage =
+        Boolean(currentProductItemId()) && link.target.toLowerCase() === "_blank";
+      if (!isLibraryPage() && !isBlankTargetOnProductPage) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       window.location.assign(product.href);
