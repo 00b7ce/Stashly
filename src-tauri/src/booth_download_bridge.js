@@ -221,7 +221,7 @@
     if (!downloadableId || !variationId) return null;
     return { href: url.href, downloadableId, variationId };
   };
-  const parseProductUrl = (value) => {
+  const parseBoothNavigationUrl = (value) => {
     let url;
     try { url = new URL(value, window.location.href); } catch { return null; }
     if (
@@ -231,6 +231,11 @@
       url.password ||
       url.port
     ) return null;
+    return url;
+  };
+  const parseProductUrl = (value) => {
+    const url = parseBoothNavigationUrl(value);
+    if (!url) return null;
     const match = url.pathname.match(/^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?items\/([1-9]\d*)\/?$/i);
     const itemId = match ? positiveInteger(match[1]) : null;
     if (!itemId) return null;
@@ -379,11 +384,21 @@
         return;
       }
       if (!link) return;
+      if (
+        link.target.toLowerCase() === "_blank" &&
+        !link.hasAttribute("download") &&
+        parseBoothNavigationUrl(window.location.href)
+      ) {
+        const navigation = parseBoothNavigationUrl(link.href);
+        if (navigation) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          window.location.assign(navigation.href);
+          return;
+        }
+      }
       const product = parseProductUrl(link.href);
-      if (!product) return;
-      const isBlankTargetOnProductPage =
-        Boolean(currentProductItemId()) && link.target.toLowerCase() === "_blank";
-      if (!isLibraryPage() && !isBlankTargetOnProductPage) return;
+      if (!product || !isLibraryPage()) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       window.location.assign(product.href);

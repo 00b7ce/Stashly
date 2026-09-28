@@ -18,6 +18,10 @@ const bridgeSource = bridgeFile
     "window.__stashlyTestNavigation = product.href",
   )
   .replace(
+    "window.location.assign(navigation.href)",
+    "window.__stashlyTestNavigation = navigation.href",
+  )
+  .replace(
     "window.location.assign(`stashly://download-intent?${query}`);",
     "window.__stashlyTestNavigation = `stashly://download-intent?${query}`;",
   )
@@ -241,6 +245,92 @@ describe("BOOTH download bridge", () => {
     expect(bridgeWindow.__stashlyTestNavigation).toBe(
       "https://booth.pm/ja/items/8779825",
     );
+  });
+
+  it.each([
+    '<span class="text-ellipsis break-all whitespace-pre text-16 overflow-hidden">DELTAWERKZ</span>',
+    '<div class="user-avatar" title="DELTAWERKZ"></div>',
+  ])("opens the sample product's shop link when its child is clicked: %s", (child) => {
+    window.history.replaceState({}, "", "/ja/items/5436632");
+    document.body.innerHTML = `
+      <a target="_blank" data-tracking="click" rel="noopener"
+        href="https://deltawerkz.booth.pm/">${child}</a>
+    `;
+    window.eval(bridgeSource);
+    const link = document.querySelector<HTMLAnchorElement>("a");
+    let siteClickHandlerRan = false;
+    link?.addEventListener("click", () => { siteClickHandlerRan = true; });
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+
+    link?.firstElementChild?.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(siteClickHandlerRan).toBe(false);
+    expect((window as unknown as Record<string, unknown>).__stashlyTestNavigation).toBe(
+      "https://deltawerkz.booth.pm/",
+    );
+  });
+
+  it("preserves the query and fragment of a new-tab BOOTH link from a search page", () => {
+    window.history.replaceState({}, "", "/ja/search");
+    document.body.innerHTML = `
+      <a target="_BLANK" href="https://deltawerkz.booth.pm/items?page=2#items">Shop items</a>
+    `;
+    window.eval(bridgeSource);
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+
+    document.querySelector("a")?.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect((window as unknown as Record<string, unknown>).__stashlyTestNavigation).toBe(
+      "https://deltawerkz.booth.pm/items?page=2#items",
+    );
+  });
+
+  it.each([
+    '<a href="https://deltawerkz.booth.pm/">DELTAWERKZ</a>',
+    '<a href="https://booth.pm/files/sample.zip" target="_blank" download>Download</a>',
+  ])("leaves normal shop links and explicit download links to the site: %s", (html) => {
+    window.history.replaceState({}, "", "/ja/items/5436632");
+    document.body.innerHTML = html;
+    window.eval(bridgeSource);
+    let siteClickHandlerRan = false;
+    const link = document.querySelector("a")!;
+    link.addEventListener("click", (event) => {
+      siteClickHandlerRan = true;
+      event.preventDefault();
+    });
+
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    expect(siteClickHandlerRan).toBe(true);
+    expect((window as unknown as Record<string, unknown>).__stashlyTestNavigation).toBeUndefined();
+  });
+
+  it.each([
+    "http://deltawerkz.booth.pm/",
+    "https://deltawerkz.booth.pm.example.test/",
+    "https://booth.pm@evil.example/",
+    "https://user:password@deltawerkz.booth.pm/",
+    "https://deltawerkz.booth.pm:8443/",
+    "https://example.test/",
+    "javascript:void(0)",
+  ])("does not redirect an unapproved new-tab destination: %s", (href) => {
+    window.history.replaceState({}, "", "/ja/items/5436632");
+    document.body.innerHTML = '<a target="_blank">Link</a>';
+    const link = document.querySelector<HTMLAnchorElement>("a")!;
+    link.href = href;
+    window.eval(bridgeSource);
+    let siteClickHandlerRan = false;
+    link.addEventListener("click", (event) => {
+      siteClickHandlerRan = true;
+      event.preventDefault();
+    });
+
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    expect(siteClickHandlerRan).toBe(true);
+    expect((window as unknown as Record<string, unknown>).__stashlyTestNavigation).toBeUndefined();
   });
 
   it("leaves a same-window product-description link to BOOTH handling", () => {
